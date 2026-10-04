@@ -47,6 +47,8 @@ const config: Config = {
           'Arial',
           'sans-serif',
         ],
+        display: ['var(--font-anton)', 'Impact', 'Haettenschweiler', 'Arial Narrow Bold', 'sans-serif'],
+        hud: ['var(--font-chakra)', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'Consolas', 'monospace'],
         mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Consolas', 'monospace'],
       },
       boxShadow: {

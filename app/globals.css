@@ -157,3 +157,153 @@ input[type='number'] {
   background: #fff;
   color: #000;
 }
+
+/* ============================================================
+   HOMEPAGE — arcade/HUD effects
+   ============================================================ */
+
+/* ---- giant outlined type (editorial headlines) ---- */
+.text-outline {
+  color: transparent;
+  -webkit-text-stroke: 1.5px rgb(var(--color-content) / 0.9);
+}
+.text-outline-primary {
+  color: transparent;
+  -webkit-text-stroke: 1.5px rgb(var(--color-primary));
+}
+@media (min-width: 640px) {
+  .text-outline,
+  .text-outline-primary {
+    -webkit-text-stroke-width: 2.5px;
+  }
+}
+
+/* ---- glitch: periodic RGB-split sparks on a word ---- */
+.glitch {
+  position: relative;
+  display: inline-block;
+}
+.glitch::before,
+.glitch::after {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.glitch::before {
+  color: #22d3ee;
+  animation: glitchA 6s infinite;
+}
+.glitch::after {
+  color: #f43f5e;
+  animation: glitchB 6s infinite;
+}
+@keyframes glitchA {
+  0%, 89.9%, 93.5%, 100% { opacity: 0; transform: none; clip-path: inset(0 0 0 0); }
+  90% { opacity: 0.9; transform: translate(-5px, 2px); clip-path: inset(12% 0 58% 0); }
+  91.2% { opacity: 0.9; transform: translate(4px, -2px); clip-path: inset(62% 0 12% 0); }
+  92.4% { opacity: 0.9; transform: translate(-3px, 1px); clip-path: inset(35% 0 40% 0); }
+}
+@keyframes glitchB {
+  0%, 89.9%, 93.5%, 100% { opacity: 0; transform: none; clip-path: inset(0 0 0 0); }
+  90.4% { opacity: 0.9; transform: translate(5px, -2px); clip-path: inset(45% 0 28% 0); }
+  91.6% { opacity: 0.9; transform: translate(-4px, 2px); clip-path: inset(5% 0 78% 0); }
+  92.8% { opacity: 0.9; transform: translate(3px, -1px); clip-path: inset(70% 0 8% 0); }
+}
+
+/* ---- infinite marquee ticker ---- */
+.marquee {
+  overflow: hidden;
+  user-select: none;
+}
+.marquee-track {
+  display: flex;
+  width: max-content;
+  animation: marquee 30s linear infinite;
+}
+.marquee:hover .marquee-track {
+  animation-play-state: paused;
+}
+@keyframes marquee {
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+/* ---- film-grain noise overlay ---- */
+.noise {
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 180px 180px;
+}
+
+/* ---- subtle CRT scanlines (hero only) ---- */
+.scanlines {
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0px,
+    transparent 3px,
+    rgba(255, 255, 255, 0.022) 3px,
+    rgba(255, 255, 255, 0.022) 4px
+  );
+}
+
+/* ---- HUD corner brackets (game-UI card frames) ---- */
+.hud {
+  position: relative;
+}
+.hud::before,
+.hud::after {
+  content: '';
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border-color: rgb(var(--color-primary) / 0.8);
+  border-style: solid;
+  transition: all 0.25s ease;
+  pointer-events: none;
+}
+.hud::before {
+  top: -1px;
+  left: -1px;
+  border-width: 2px 0 0 2px;
+}
+.hud::after {
+  bottom: -1px;
+  right: -1px;
+  border-width: 0 2px 2px 0;
+}
+.hud:hover::before,
+.hud:hover::after {
+  width: 26px;
+  height: 26px;
+  border-color: rgb(var(--color-secondary));
+}
+
+/* ---- light sweep on hover (buttons) ---- */
+.btn-shine {
+  position: relative;
+  overflow: hidden;
+}
+.btn-shine::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -80%;
+  width: 45%;
+  height: 100%;
+  background: linear-gradient(105deg, transparent, rgba(255, 255, 255, 0.4), transparent);
+  transform: skewX(-20deg);
+  transition: left 0.6s ease;
+  pointer-events: none;
+}
+.btn-shine:hover::after {
+  left: 135%;
+}
+
+/* ---- rotated sticker badge ---- */
+.sticker {
+  transform: rotate(-6deg);
+}
+
