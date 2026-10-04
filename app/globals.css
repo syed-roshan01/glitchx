@@ -1,0 +1,159 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================
+   Centralized design tokens — change the theme here.
+   Colors are RGB triplets so Tailwind opacity modifiers
+   (e.g. bg-primary/20) work everywhere.
+   ============================================================ */
+:root {
+  --color-background: 9 9 11;
+  --color-surface: 24 24 27;
+  --color-surface-2: 31 31 35;
+  --color-surface-3: 39 39 42;
+  --color-border: 39 39 42;
+  --color-border-strong: 63 63 70;
+  --color-primary: 124 58 237;
+  --color-secondary: 6 182 212;
+  --color-success: 34 197 94;
+  --color-danger: 239 68 68;
+  --color-warning: 245 158 11;
+  --color-muted: 161 161 170;
+  --color-content: 250 250 250;
+
+  /* pre-mixed rgba accents for glows */
+  --color-primary-soft: rgba(124, 58, 237, 0.4);
+  --color-secondary-soft: rgba(6, 182, 212, 0.4);
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-background text-content antialiased;
+  background-image:
+    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(124, 58, 237, 0.13), transparent),
+    radial-gradient(ellipse 60% 40% at 90% 110%, rgba(6, 182, 212, 0.07), transparent);
+  background-attachment: fixed;
+  min-height: 100dvh;
+}
+
+* {
+  border-color: rgb(var(--color-border));
+}
+
+/* scrollbars */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--color-surface-3));
+  border-radius: 8px;
+  border: 2px solid rgb(var(--color-background));
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--color-border-strong));
+}
+
+/* focus visibility (accessibility) */
+:focus-visible {
+  outline: 2px solid rgb(var(--color-secondary));
+  outline-offset: 2px;
+}
+
+/* ============================================================
+   Components
+   ============================================================ */
+@layer components {
+  .glass {
+    background: linear-gradient(160deg, rgba(31, 31, 35, 0.85), rgba(24, 24, 27, 0.92));
+    border: 1px solid rgb(var(--color-border));
+    backdrop-filter: blur(14px);
+  }
+
+  .input-base {
+    @apply w-full rounded-xl border bg-surface-2 px-3.5 py-2.5 text-sm text-content
+      placeholder:text-muted/60 transition-colors;
+  }
+  .input-base:focus {
+    outline: none;
+    border-color: rgb(var(--color-primary));
+    box-shadow: 0 0 0 3px var(--color-primary-soft);
+  }
+  .input-base:disabled {
+    @apply opacity-50 cursor-not-allowed;
+  }
+
+  .label-base {
+    @apply mb-1.5 block text-xs font-semibold uppercase tracking-wider text-muted;
+  }
+}
+
+/* number inputs: hide spinners for cleaner look */
+input[type='number']::-webkit-outer-spin-button,
+input[type='number']::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type='number'] {
+  -moz-appearance: textfield;
+}
+
+/* ============================================================
+   Printing — invoices (A4 + 80mm thermal)
+   Uses the visibility technique so only the active print area
+   is printed, regardless of the surrounding admin shell.
+   ============================================================ */
+@media print {
+  body {
+    background: #fff !important;
+    color: #000 !important;
+    background-image: none !important;
+  }
+  body * {
+    visibility: hidden;
+  }
+  .print-area,
+  .print-area * {
+    visibility: visible;
+  }
+  .print-area {
+    position: absolute !important;
+    left: 0;
+    top: 0;
+    width: 100%;
+    box-shadow: none !important;
+    border: none !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+}
+
+/* Thermal receipt: 80mm roll ≈ 302px printable width */
+.thermal-receipt {
+  width: 302px;
+  font-family: ui-monospace, 'Courier New', monospace;
+  font-size: 12px;
+  color: #000;
+  background: #fff;
+}
+
+.thermal-print .print-area {
+  width: 80mm;
+  margin: 0 auto;
+}
+
+.a4-print .print-area {
+  width: 210mm;
+  min-height: 290mm;
+  padding: 14mm;
+  background: #fff;
+  color: #000;
+}

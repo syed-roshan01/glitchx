@@ -1,0 +1,40 @@
+{
+  "name": "glitchx-gaming-cafe",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Gaming Cafe Management & Booking System — Next.js + Supabase",
+  "scripts": {
+    "dev": "next dev",
+    "dev:inprocess": "node scripts/dev-server.cjs",
+    "build": "next build",
+    "start": "next start",
+    "test": "node --experimental-strip-types --test tests/",
+    "test:file": "node --experimental-strip-types",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json",
+    "verify:schema": "node .pgtest/run.cjs"
+  },
+  "dependencies": {
+    "@supabase/ssr": "^0.5.1",
+    "@supabase/supabase-js": "^2.45.4",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.441.0",
+    "next": "14.2.35",
+    "qrcode": "^1.5.4",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "recharts": "^2.12.7",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.16.5",
+    "@types/qrcode": "^1.5.5",
+    "@types/react": "^18.3.5",
+    "@types/react-dom": "^18.3.0",
+    "autoprefixer": "^10.4.20",
+    "embedded-postgres": "^18.4.0-beta.17",
+    "postcss": "^8.4.45",
+    "pg": "^8.23.1",
+    "tailwindcss": "^3.4.10",
+    "typescript": "^5.5.4"
+  }
+}
