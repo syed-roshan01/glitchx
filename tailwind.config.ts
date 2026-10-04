@@ -62,6 +62,8 @@ const config: Config = {
         'fade-in': 'fadeIn 0.25s ease-out',
         'slide-up': 'slideUp 0.3s ease-out',
         'pulse-dot': 'pulseDot 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+        float: 'float 7s ease-in-out infinite',
+        'float-slow': 'float 11s ease-in-out infinite',
       },
       keyframes: {
         fadeIn: {
@@ -75,6 +77,10 @@ const config: Config = {
         pulseDot: {
           '0%, 100%': { opacity: '1' },
           '50%': { opacity: '0.35' },
+        },
+        float: {
+          '0%, 100%': { transform: 'translateY(0px)' },
+          '50%': { transform: 'translateY(-18px)' },
         },
       },
     },
