@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, jsonError, audit } from '@/lib/supabase/api';
+import { invalidateCachedSettings } from '@/lib/supabase/settings-cache';
 import { mapSettings } from '@/lib/mappers';
 import { settingsSchema } from '@/lib/validations/schemas';
 
@@ -60,6 +61,7 @@ export async function PUT(req: NextRequest) {
     .single();
   if (error) return jsonError('Could not save settings', 400);
 
+  invalidateCachedSettings();
   await audit(admin, userId, 'settings.updated', 'settings', 'default', {
     billing_mode: s.billing_mode,
     tax_enabled: s.tax_enabled,

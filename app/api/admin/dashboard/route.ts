@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { requireAuth, jsonError } from '@/lib/supabase/api';
-import { mapSettings, mapSession, mapSessionItem, mapBooking, mapWaitlist, mapResource, mapPricingRule } from '@/lib/mappers';
+import { getCachedSettings } from '@/lib/supabase/settings-cache';
+import { mapSession, mapSessionItem, mapBooking, mapWaitlist, mapResource, mapPricingRule } from '@/lib/mappers';
 import { getZonedDayStart } from '@/lib/utils/time';
 import { num } from '@/lib/billing/format';
 import type { DashboardStats } from '@/types';
@@ -14,18 +15,20 @@ export async function GET() {
   const { admin } = ctx;
 
   try {
-    // lazy-activate any due SCHEDULED sessions first
-    await admin.rpc('activate_due_sessions');
+    // The day-bounded queries need the timezone — get it from the (cached)
+    // settings first. Warm requests skip this round-trip entirely.
+    const settings = await getCachedSettings(admin);
+    const dayStart = getZonedDayStart(settings.timezone || 'Asia/Kolkata').toISOString();
 
-    const settingsRow = (await admin.from('settings').select('*').eq('id', 'default').single()).data;
-    const settings = mapSettings(settingsRow ?? {});
-    const dayStart = getZonedDayStart(settings.timezone || 'Asia/Kolkata');
-
-    const [invoicesRes, activeRes, todaySessionsRes, pendingRes, waitlistRes,
-      bookingsRes, resourcesRes, rulesRes] = await Promise.all([
+    // Everything in ONE parallel batch: due-session activation, the queries
+    // and the active session items (joined via the session status, so no
+    // second sequential round-trip is needed).
+    const [/* activate */, invoicesRes, activeRes, todaySessionsRes, pendingRes, waitlistRes,
+      bookingsRes, resourcesRes, rulesRes, itemsRes] = await Promise.all([
+      admin.rpc('activate_due_sessions'),
       admin.from('invoices')
         .select('gaming_amount, items_amount, services_amount, total_amount, status, issued_at, session_id')
-        .gte('issued_at', dayStart.toISOString())
+        .gte('issued_at', dayStart)
         .neq('status', 'VOID'),
       admin.from('sessions')
         .select('*, customers(name, mobile), resources(name, type)')
@@ -33,15 +36,19 @@ export async function GET() {
         .order('actual_start_time', { ascending: true }),
       admin.from('sessions')
         .select('id, customer_id, resource_id, duration_seconds, actual_start_time, status, resources(name)')
-        .gte('actual_start_time', dayStart.toISOString()),
+        .gte('actual_start_time', dayStart),
       admin.from('bookings').select('id', { count: 'exact', head: true }).eq('status', 'PENDING'),
       admin.from('waitlist').select('*, resources(name)').eq('status', 'WAITING').order('position'),
       admin.from('bookings')
         .select('*, resources(name, type)')
-        .gte('start_time', dayStart.toISOString())
+        .gte('start_time', dayStart)
         .order('start_time', { ascending: true }).limit(12),
       admin.from('resources').select('*').order('name'),
       admin.from('pricing_rules').select('*').eq('active', true),
+      admin.from('session_items')
+        .select('*, sessions!inner(status)')
+        .in('sessions.status', ['ACTIVE', 'PAUSED'])
+        .order('created_at'),
     ]);
 
     const invoices = invoicesRes.data ?? [];
@@ -54,12 +61,6 @@ export async function GET() {
     }));
     const todaySessions = todaySessionsRes.data ?? [];
     const resources = (resourcesRes.data ?? []).map(mapResource);
-
-    // session items for active sessions (live bill preview)
-    const activeIds = activeSessions.map((s) => s.id);
-    const itemsRes = activeIds.length
-      ? await admin.from('session_items').select('*').in('session_id', activeIds).order('created_at')
-      : { data: [] };
     const sessionItems = (itemsRes.data ?? []).map(mapSessionItem);
 
     // ---- stats ----

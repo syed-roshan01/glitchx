@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
+import { headers } from 'next/headers';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createServerSupabaseClient } from './server';
 import { createAdminClient } from './admin';
+import { verifyIdentity, IDENTITY_HEADER } from '@/lib/auth/signed-identity';
 import type { Profile, Role } from '@/types';
 
 export { friendlyError } from '@/lib/utils/errors';
@@ -14,13 +16,41 @@ export interface AuthContext {
 }
 
 /**
- * Authenticates the caller (via cookie session) and authorizes the
- * role. Returns a 401/403 NextResponse on failure — route handlers
- * simply `return auth.response`.
+ * Authenticates the caller and authorizes the role.
+ *
+ * Fast path: when the request passed through the middleware (which already
+ * validated the session), a signed identity header is present — it is verified
+ * locally with ZERO network round-trips.
+ * Fallback: full getUser + profile lookup for requests that bypassed the
+ * middleware.
+ *
+ * Returns a 401/403 NextResponse on failure — route handlers simply
+ * `return auth.response`.
  */
 export async function requireAuth(
   allowedRoles?: Role[]
 ): Promise<{ ctx: AuthContext | null; response: NextResponse | null }> {
+  // ---- fast path: middleware-signed identity (no network) ----
+  const claims = await verifyIdentity(headers().get(IDENTITY_HEADER));
+  if (claims) {
+    if (allowedRoles && !allowedRoles.includes(claims.role as Role)) {
+      return {
+        ctx: null,
+        response: NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 }),
+      };
+    }
+    const profile = {
+      id: claims.sub,
+      name: claims.name,
+      email: null,
+      role: claims.role,
+      active: true,
+      created_at: null,
+    } as unknown as Profile;
+    return { ctx: { userId: claims.sub, profile, admin: createAdminClient() }, response: null };
+  }
+
+  // ---- fallback: full verification ----
   const supabase = createServerSupabaseClient();
   const {
     data: { user },
@@ -80,6 +110,5 @@ export async function audit(
 }
 
 export function jsonError(message: string, status = 400) {
-  return NextResponse.json({ error: message }, { status });
+  return NextResponse.json({ error: message }, { status: status });
 }
-

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, jsonError } from '@/lib/supabase/api';
-import { mapSettings } from '@/lib/mappers';
+import { getCachedSettings } from '@/lib/supabase/settings-cache';
 import { getZonedDayStart, getZonedDayStartNDaysAgo, zonedDateKey, zonedHour } from '@/lib/utils/time';
 import { num } from '@/lib/billing/format';
 
@@ -19,8 +19,7 @@ export async function GET(req: NextRequest) {
   const range = req.nextUrl.searchParams.get('range') ?? 'day';
   const days = range === 'day' ? 1 : range === 'week' ? 7 : 30;
 
-  const settingsRow = (await admin.from('settings').select('*').eq('id', 'default').single()).data;
-  const settings = mapSettings(settingsRow ?? {});
+  const settings = await getCachedSettings(admin);
   const tz = settings.timezone || 'Asia/Kolkata';
   const start =
     days === 1
@@ -34,15 +33,12 @@ export async function GET(req: NextRequest) {
       .select('id, issued_at, status, gaming_amount, items_amount, services_amount, total_amount, session_id')
       .gte('issued_at', startIso)
       .neq('status', 'VOID'),
+    // joined via the invoice's issued_at — one query, no sub-select round-trip
     admin
       .from('invoice_items')
-      .select('invoice_id, item_type, name_snapshot, quantity, total_price')
-      .in(
-        'invoice_id',
-        ((await admin.from('invoices').select('id').gte('issued_at', startIso).neq('status', 'VOID')).data ?? []).map(
-          (r: any) => r.id
-        )
-      ),
+      .select('invoice_id, item_type, name_snapshot, quantity, total_price, invoices!inner(issued_at, status)')
+      .gte('invoices.issued_at', startIso)
+      .neq('invoices.status', 'VOID'),
     admin
       .from('payments')
       .select('amount, payment_method, payment_status, created_at')
