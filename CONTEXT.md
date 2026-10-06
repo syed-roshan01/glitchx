@@ -33,7 +33,9 @@
 
 | Commit | What |
 |---|---|
-| `d7ad75a` | ⚠️ **Accidental sweep** — message says "dev-server cache fix" but it actually contains session 3's full review/fix pass (~71 files: /book rebuild, 00014, use-api caching, vercel.json) that was staged-but-uncommitted when session 4 committed. Work is verified-good; only the message is misleading. Lesson: **never run two AI sessions in this folder simultaneously** — session 3's live edits also corrupted the dev HMR cache and caused a CONTEXT.md write conflict. |
+| `d76db96` | Session 4 reconciliation: verified 00014 applied live + security probes, fixed stale CONTEXT.md notes, gitignored `.claude/` |
+| `311072f` | Session 3's own commit of its remaining work ("Security hardening, faster admin panel, redesigned booking flow"), pushed one minute after the accidental sweep |
+| `d7ad75a` | ⚠️ **Accidental sweep** — message says "dev-server cache fix" but it actually contains most of session 3's review/fix pass (~71 files: /book rebuild, 00014, use-api caching, vercel.json) that was staged-but-uncommitted when session 4 committed. Work is verified-good; only the message is misleading. Lesson: **never run two AI sessions in this folder simultaneously** — session 3's live edits also corrupted the dev HMR cache and caused a CONTEXT.md write conflict. |
 | `814374c` | CONTEXT.md created (living document) |
 | `21d758e` | Perf: signed-identity fast-path auth (0 network round-trips in API routes), parallel dashboard/reports queries, cached settings |
 | `120edda` | Homepage redesign: arcade HUD aesthetic, framer-motion, Anton + Chakra Petch fonts, glitch effects, marquee, tilt cards |
