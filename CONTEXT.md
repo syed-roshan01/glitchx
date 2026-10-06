@@ -23,9 +23,9 @@
 | Thing | Value |
 |---|---|
 | Supabase project ref | `vfonvktaqurwfapkgfuz` → `https://vfonvktaqurwfapkgfuz.supabase.co` |
-| Region | ⚠️ NOT Mumbai — measured **~100ms RTT** from this machine (Mumbai would be ~10-20ms). Migration to a Mumbai project proposed; **not done** (see §9). |
+| Region | **Mumbai (ap-south-1)** — verified 2026-10-06 by mapping the DB host IP against AWS ip-ranges. (Earlier "not Mumbai" note was wrong; the ~100ms RTT was this machine's network.) Vercel functions pinned to `bom1` via `vercel.json` so server↔DB is same-region. |
 | Auth | Email/password, staff-only. **"Confirm email" is OFF.** First account via `/admin/setup` becomes ADMIN (claim via `claim_first_admin()`). |
-| Schema | 13 migrations applied (combined in [`supabase/setup.sql`](supabase/setup.sql); reset via [`supabase/reset.sql`](supabase/reset.sql)). Seed: PS5 ₹100/hr (+2h pkg ₹180), Pool ₹300/hr (+30min ₹150), Coke ₹40, Water ₹20, Chips ₹30, Extra Controller ₹50. |
+| Schema | ⚠️ **00014 written but NOT yet applied to live** — run `supabase/migrations/00014_security_payments_booking.sql` in the SQL Editor. 13 migrations applied (combined in [`supabase/setup.sql`](supabase/setup.sql); reset via [`supabase/reset.sql`](supabase/reset.sql)). Seed: PS5 ₹100/hr (+2h pkg ₹180), Pool ₹300/hr (+30min ₹150), Coke ₹40, Water ₹20, Chips ₹30, Extra Controller ₹50. |
 | Keys | All in `.env.local` (gitignored — never commit; rotate if leaked). Vercel has **3 env vars** (URL, anon, service_role). `NEXT_PUBLIC_APP_URL` deliberately NOT set — the booking QR falls back to the request origin, so it auto-tracks the domain. |
 | Custom domain | Not connected yet. When added in Vercel → Settings → Domains, QR + everything follows automatically. |
 
@@ -78,6 +78,7 @@ DB exclusion constraints; invoice prices snapshotted (immutable history).
 | Tests | `npm test` (billing, 26) · `npm run verify:schema` (DB, 29 + reset cycle) · `npm run typecheck` |
 | git push (in-sandbox) | `git -c http.sslBackend=openssl push` with gh token injected into remote URL temporarily (schannel + credential-helper spawning are blocked). From a normal terminal: plain `git push`. |
 | Known noise | `sh.exe couldn't create signal pipe` during push = harmless. `revalidateTag http://localhost:undefined` TypeError during sandbox builds = harmless (build completes; production build serves fine). PowerShell 5.1: `$home` is read-only, no ternary operator, watch TLS 12 for Invoke-RestMethod. |
+| Dev-server crash fix | If dev 500s with `__webpack_modules__[moduleId] is not a function` (stale HMR cache after many hot reloads): `Remove-Item -Recurse -Force .next`, restart. Production builds unaffected. |
 
 ## 6. Verification toolkit
 
@@ -124,11 +125,36 @@ DB exclusion constraints; invoice prices snapshotted (immutable history).
   settings cache, direct 401s. Verified end-to-end with temp user against
   production build. Dev server left running (now killed).
 
+- **2026-10-06 (session 3):** Full review + fix pass.
+  - Security: admin RPCs were executable by anon (PUBLIC execute grant never revoked)
+    → 00014 revokes from PUBLIC. Self-signups now get INACTIVE profiles; `my_role()`
+    ignores inactive; `claim_first_admin` activates; staff API activates new staff.
+  - New RPCs: `admin_record_payment` (locked, atomic), `public_get_busy_slots`,
+    `public_lookup_booking`, `public_cancel_booking`, `mobile_digits`.
+  - Perf: middleware uses `auth.getClaims()` (local ES256/JWKS verify, no Auth RTT);
+    admin pages use `lib/use-api.ts` (SWR cache) + `useSettings()` from
+    `components/admin/admin-context.tsx` instead of fetching /api/admin/dashboard;
+    layout uses cached settings; `vercel.json` regions=bom1; router staleTimes.
+  - API fixes: lone-admin staff creation 409, payments race, filter injection
+    (`searchTerm`), paging (`pageParams`), FK → 409 (`dbErrorStatus`), customer
+    PATCH validation, discount validation, reports ADMIN/MANAGER only, tz validation,
+    bookings `?date=`, payments `todayTotal`, session GET returns `invoice`.
+  - UI fixes: session detail hooks crash, end-session discount sync, stale session
+    card items, add-item duplicates, endless skeletons, Today tab, utilization,
+    mojibake, setup/login inactive-account handling.
+  - /book rebuilt: 4-step flow (station → day/duration/time → details → review),
+    cafe-timezone slots from busy intervals, sticky summary, .ics + share, My booking
+    lookup/cancel, remembered details. Files under `app/book/_components/`.
+  - Tests: DB suite now 41 checks (`npm run verify:schema`); `npm test` script fixed
+    for Node 22. A stale dev server (scripts/dev-server.cjs) was found running and
+    rewriting `.next` — stop it before `next build`.
+
 ## 9. Known issues / pending
 
-1. **Supabase region latency (~100ms)** — biggest remaining win. Proposed migrating
-   to a Mumbai (ap-south-1) project: new project → run `setup.sql` → recreate admin
-   account → swap 3 keys in `.env.local` + Vercel. User hasn't decided yet.
+1. **Apply 00014 to live Supabase** (SQL Editor) and redeploy — security fixes and
+   the new booking/payment RPCs depend on it. Then review `profiles` for any
+   unknown self-signed-up accounts and deactivate them. Optionally disable
+   "Allow new users to sign up" in Supabase Auth settings after setup.
 2. **Admin account status unconfirmed** — user was told to complete
    `/admin/setup`; never explicitly confirmed. Check: dashboard → does login work /
    `public_setup_status` → `needs_admin`.
