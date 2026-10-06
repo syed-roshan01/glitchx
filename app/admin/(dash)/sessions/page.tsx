@@ -1,10 +1,11 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { api } from '@/lib/api-client';
+import { useApi, invalidate } from '@/lib/use-api';
+import { useSettings } from '@/components/admin/admin-context';
 import { useRealtime, useDebouncedCallback } from '@/hooks/use-realtime';
-import { PageHeader, EmptyState, StatCard } from '@/components/ui/misc';
+import { PageHeader, EmptyState, StatCard, ErrorState } from '@/components/ui/misc';
 import { ListSkeleton } from '@/components/ui/skeleton';
 import { StatusBadge } from '@/components/ui/badge';
 import { SessionCard } from '@/components/admin/session-card';
@@ -21,37 +22,27 @@ const TABS: { id: Tab; label: string }[] = [
 
 export default function SessionsPage() {
   const [tab, setTab] = useState<Tab>('live');
-  const [sessions, setSessions] = useState<Session[] | null>(null);
-  const [items, setItems] = useState<SessionItem[]>([]);
-  const [settings, setSettings] = useState<CafeSettings | null>(null);
-  const [rules, setRules] = useState<PricingRule[]>([]);
+  const settings = useSettings();
   const [page, setPage] = useState(0);
-  const [total, setTotal] = useState(0);
 
-  const load = useCallback(async () => {
-    try {
-      const params = new URLSearchParams({ status: tab, limit: '24', offset: String(page * 24) });
-      const res = await api.get<{ sessions: Session[]; items: SessionItem[]; total: number }>(
-        `/api/admin/sessions?${params}`
-      );
-      setSessions(res.sessions);
-      setItems(res.items);
-      setTotal(res.total);
-      const dash = await api.get<{ settings: CafeSettings; rules: PricingRule[] }>('/api/admin/dashboard');
-      setSettings(dash.settings);
-      setRules(dash.rules);
-    } catch {
-      setSessions([]);
-    }
-  }, [tab, page]);
+  const params = new URLSearchParams({ status: tab, limit: '24', offset: String(page * 24) });
+  const { data, error, reload } = useApi<{ sessions: Session[]; items: SessionItem[]; total: number }>(
+    `/api/admin/sessions?${params}`
+  );
+  const { data: rulesData } = useApi<{ rules: PricingRule[] }>('/api/admin/pricing/rules');
+  const rules = useMemo(() => (rulesData?.rules ?? []).filter((r) => r.active), [rulesData]);
+  const sessions = data?.sessions ?? null;
+  const items = useMemo(() => data?.items ?? [], [data]);
+  const total = data?.total ?? 0;
 
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  const refetch = useDebouncedCallback(load, 500);
+  const refetch = useDebouncedCallback(reload, 500);
   useRealtime('sessions', refetch);
   useRealtime('session_items', refetch);
+
+  const onChanged = useCallback(() => {
+    reload();
+    invalidate('/api/admin/dashboard');
+  }, [reload]);
 
   const liveCount = tab === 'live' ? sessions?.length ?? 0 : 0;
 
@@ -89,7 +80,9 @@ export default function SessionsPage() {
         ))}
       </div>
 
-      {!sessions || !settings ? (
+      {error && !data ? (
+        <ErrorState message={error.message} onRetry={reload} />
+      ) : !sessions ? (
         <ListSkeleton rows={4} />
       ) : sessions.length === 0 ? (
         <EmptyState
@@ -115,7 +108,7 @@ export default function SessionsPage() {
           </div>
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 2xl:grid-cols-3">
             {sessions.map((s) => (
-              <SessionCard key={s.id} session={s} items={items} settings={settings} rules={rules} onChanged={refetch} />
+              <SessionCard key={s.id} session={s} items={items} settings={settings} rules={rules} onChanged={onChanged} />
             ))}
           </div>
         </>

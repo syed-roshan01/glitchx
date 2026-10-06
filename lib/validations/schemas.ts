@@ -47,6 +47,13 @@ export const addSessionItemSchema = z.object({
   quantity: z.number().int().min(1).max(999).default(1),
 });
 
+export const customerUpdateSchema = z.object({
+  name: z.string().trim().min(2, 'Name is too short').max(120).optional(),
+  mobile: mobileSchema.optional(),
+  email: z.union([z.string().trim().email('Invalid email'), z.literal(''), z.null()]).optional(),
+  notes: z.string().max(500).optional().nullable(),
+});
+
 export const setDiscountSchema = z.object({
   discountType: z.enum(['PERCENT', 'FIXED']).nullable(),
   discountValue: z.number().min(0).max(100000),
@@ -144,7 +151,20 @@ export const settingsSchema = z.object({
   gstin: z.string().max(30).optional().nullable(),
   currency: z.string().trim().min(1).max(8).default('INR'),
   currency_symbol: z.string().trim().min(1).max(4).default('₹'),
-  timezone: z.string().trim().min(1).max(60).default('Asia/Kolkata'),
+  timezone: z
+    .string()
+    .trim()
+    .min(1)
+    .max(60)
+    .refine((tz) => {
+      try {
+        new Intl.DateTimeFormat('en-US', { timeZone: tz });
+        return true;
+      } catch {
+        return false;
+      }
+    }, 'Unknown timezone (use an IANA name like Asia/Kolkata)')
+    .default('Asia/Kolkata'),
   invoice_prefix: z.string().trim().min(1).max(10).default('INV'),
   tax_enabled: z.boolean().default(false),
   tax_name: z.string().max(40).optional().nullable(),

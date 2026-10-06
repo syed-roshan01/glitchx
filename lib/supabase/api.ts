@@ -109,6 +109,27 @@ export async function audit(
   }
 }
 
+/** HTTP status for a database error: FK/unique conflicts → 409, bad ids → 404. */
+export function dbErrorStatus(err: { code?: string; message?: string } | null | undefined, fallback = 400) {
+  if (err?.code === '23503' || err?.code === '23505') return 409;
+  if (err?.code === '22P02' || err?.code === 'PGRST116') return 404;
+  return fallback;
+}
+
+/** Sanitise a free-text search term for use inside a PostgREST `.or()` filter. */
+export function searchTerm(q: string | null | undefined, max = 60): string {
+  return (q ?? '').replace(/[,()*%\\:"']/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
+}
+
+/** Parse limit/offset query params safely. */
+export function pageParams(req: { nextUrl: URL }, defLimit = 20, maxLimit = 100) {
+  const l = Number(req.nextUrl.searchParams.get('limit'));
+  const o = Number(req.nextUrl.searchParams.get('offset'));
+  const limit = Number.isFinite(l) && l > 0 ? Math.min(Math.floor(l), maxLimit) : defLimit;
+  const offset = Number.isFinite(o) && o > 0 ? Math.floor(o) : 0;
+  return { limit, offset };
+}
+
 export function jsonError(message: string, status = 400) {
   return NextResponse.json({ error: message }, { status: status });
 }

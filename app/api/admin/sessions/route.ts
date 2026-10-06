@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth, jsonError, friendlyError, audit } from '@/lib/supabase/api';
+import { requireAuth, jsonError, friendlyError, audit, pageParams } from '@/lib/supabase/api';
 import { mapSession } from '@/lib/mappers';
 import { startSessionSchema, quickCustomerSchema } from '@/lib/validations/schemas';
 import { toIsoOrNull } from '@/lib/utils/misc';
@@ -14,8 +14,7 @@ export async function GET(req: NextRequest) {
 
   const params = req.nextUrl.searchParams;
   const status = params.get('status');
-  const limit = Math.min(Number(params.get('limit') ?? 50), 200);
-  const offset = Number(params.get('offset') ?? 0);
+  const { limit, offset } = pageParams(req, 50, 200);
   const customerId = params.get('customerId');
 
   let query = admin

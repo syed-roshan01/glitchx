@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth, jsonError, friendlyError, audit } from '@/lib/supabase/api';
+import { requireAuth, jsonError, friendlyError, audit, dbErrorStatus } from '@/lib/supabase/api';
 import { mapPricingRule } from '@/lib/mappers';
 import { pricingRuleSchema } from '@/lib/validations/schemas';
 
@@ -35,6 +35,18 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (input.priority !== undefined) update.priority = input.priority;
   if (input.active !== undefined) update.active = input.active;
 
+  if (update.start_time !== undefined || update.end_time !== undefined) {
+    const { data: cur } = await admin
+      .from('pricing_rules')
+      .select('start_time, end_time')
+      .eq('id', params.id)
+      .single();
+    if (!cur) return jsonError('Rule not found', 404);
+    const start = String(update.start_time ?? cur.start_time);
+    const end = String(update.end_time ?? cur.end_time);
+    if (start >= end) return jsonError('End time must be after start time');
+  }
+
   const { data, error } = await admin
     .from('pricing_rules')
     .update(update)
@@ -53,7 +65,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
   const { admin, userId } = ctx;
 
   const { error } = await admin.from('pricing_rules').delete().eq('id', params.id);
-  if (error) return jsonError(friendlyError(error), 400);
+  if (error) return jsonError(friendlyError(error), dbErrorStatus(error));
   await audit(admin, userId, 'pricing.rule_deleted', 'pricing_rule', params.id);
   return NextResponse.json({ ok: true });
 }

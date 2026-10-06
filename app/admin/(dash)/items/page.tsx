@@ -1,44 +1,32 @@
-﻿'use client';
+'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '@/lib/api-client';
-import { PageHeader, EmptyState } from '@/components/ui/misc';
+import { useApi } from '@/lib/use-api';
+import { useSettings } from '@/components/admin/admin-context';
+import { PageHeader, EmptyState, ErrorState } from '@/components/ui/misc';
 import { ListSkeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { Input, Field, Select } from '@/components/ui/input';
 import { Modal, ConfirmDialog } from '@/components/ui/modal';
 import { useToast } from '@/components/ui/toast';
 import { formatMoney } from '@/lib/billing/format';
-import type { CafeSettings, MenuItem } from '@/types';
+import type { MenuItem } from '@/types';
 import { CupSoda, Plus, Pencil, Trash2 } from 'lucide-react';
 
 const CATEGORIES = ['DRINK', 'SNACK', 'FOOD', 'OTHER'] as const;
 
 export default function ItemsPage() {
   const toast = useToast();
-  const [items, setItems] = useState<MenuItem[] | null>(null);
-  const [settings, setSettings] = useState<CafeSettings | null>(null);
+  const settings = useSettings();
+  const { data, error, reload } = useApi<{ items: MenuItem[] }>('/api/admin/items');
+  const items = data?.items ?? null;
   const [editItem, setEditItem] = useState<MenuItem | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const load = useCallback(async () => {
-    try {
-      const [i, s] = await Promise.all([
-        api.get<{ items: MenuItem[] }>('/api/admin/items'),
-        api.get<{ settings: CafeSettings }>('/api/admin/dashboard'),
-      ]);
-      setItems(i.items);
-      setSettings(s.settings);
-    } catch {
-      setItems([]);
-    }
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  const load = reload;
 
   async function remove() {
     if (!deleteId) return;
@@ -55,7 +43,7 @@ export default function ItemsPage() {
     }
   }
 
-  const sym = settings?.currency_symbol || 'â‚¹';
+  const sym = settings.currency_symbol || '₹';
   const grouped = CATEGORIES.map((c) => ({
     category: c,
     items: (items ?? []).filter((i) => i.category === c),
@@ -64,7 +52,7 @@ export default function ItemsPage() {
   return (
     <div>
       <PageHeader
-        title="Items â€” Food & Drinks"
+        title="Items — Food & Drinks"
         subtitle="Menu prices are snapshotted onto each bill, so old invoices never change"
         actions={
           <Button onClick={() => setAddOpen(true)}>
@@ -73,7 +61,9 @@ export default function ItemsPage() {
         }
       />
 
-      {!items ? (
+      {error && !data ? (
+        <ErrorState message={error.message} onRetry={reload} />
+      ) : !items ? (
         <ListSkeleton rows={6} />
       ) : items.length === 0 ? (
         <EmptyState
@@ -96,7 +86,7 @@ export default function ItemsPage() {
                       <p className="text-sm font-bold">{item.name}</p>
                       <p className="text-xs text-muted">
                         {item.track_inventory && item.stock !== null
-                          ? `Stock: ${item.stock}${item.stock <= 5 ? ' âš  low' : ''}`
+                          ? `Stock: ${item.stock}${item.stock <= 5 ? ' ⚠ low' : ''}`
                           : 'No inventory tracking'}
                       </p>
                     </div>
@@ -213,7 +203,7 @@ function ItemModal({
           </Field>
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Selling price (â‚¹)" required>
+          <Field label="Selling price (₹)" required>
             <Input type="number" min={0} step="0.01" value={form.price} onChange={(e) => setForm({ ...form, price: Number(e.target.value) })} required />
           </Field>
           <Field label="Cost price (optional)">

@@ -1,12 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip,
   BarChart, Bar, CartesianGrid,
 } from 'recharts';
-import { api } from '@/lib/api-client';
-import { PageHeader, StatCard, EmptyState } from '@/components/ui/misc';
+import { useApi } from '@/lib/use-api';
+import { useSettings } from '@/components/admin/admin-context';
+import { PageHeader, StatCard, EmptyState, ErrorState } from '@/components/ui/misc';
 import { ListSkeleton } from '@/components/ui/skeleton';
 import { formatMoney } from '@/lib/billing/format';
 import type { CafeSettings } from '@/types';
@@ -32,16 +33,10 @@ const RANGES = [
 
 export default function ReportsPage() {
   const [range, setRange] = useState<'day' | 'week' | 'month'>('day');
-  const [data, setData] = useState<ReportData | null>(null);
+  const settings = useSettings();
+  const { data, error, reload } = useApi<ReportData>(`/api/admin/reports?range=${range}`);
 
-  useEffect(() => {
-    setData(null);
-    api.get<ReportData>(`/api/admin/reports?range=${range}`)
-      .then(setData)
-      .catch(() => setData(null));
-  }, [range]);
-
-  const sym = data?.settings.currency_symbol ?? '₹';
+  const sym = settings.currency_symbol || '₹';
 
   return (
     <div>
@@ -66,7 +61,9 @@ export default function ReportsPage() {
         }
       />
 
-      {!data ? (
+      {error && !data ? (
+        <ErrorState message={error.message} onRetry={reload} />
+      ) : !data ? (
         <ListSkeleton rows={8} />
       ) : (
         <div className="space-y-6">

@@ -1,23 +1,28 @@
-﻿'use client';
+'use client';
 
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '@/lib/api-client';
-import { PageHeader, EmptyState } from '@/components/ui/misc';
+import { useApi } from '@/lib/use-api';
+import { useSettings } from '@/components/admin/admin-context';
+import { PageHeader, EmptyState, ErrorState } from '@/components/ui/misc';
 import { ListSkeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { Input, Field, Select } from '@/components/ui/input';
 import { Modal, ConfirmDialog } from '@/components/ui/modal';
 import { useToast } from '@/components/ui/toast';
 import { formatMoney, formatTimeOfDay, dayName } from '@/lib/billing/format';
-import type { CafeSettings, PricingPlan, PricingRule, Resource } from '@/types';
+import type { PricingPlan, PricingRule, Resource } from '@/types';
 import { Tag, Plus, Pencil, Trash2, Zap, Clock } from 'lucide-react';
 
 export default function PricingPage() {
   const toast = useToast();
-  const [plans, setPlans] = useState<PricingPlan[] | null>(null);
-  const [rules, setRules] = useState<PricingRule[]>([]);
-  const [resources, setResources] = useState<Resource[]>([]);
-  const [settings, setSettings] = useState<CafeSettings | null>(null);
+  const settings = useSettings();
+  const { data: planData, error: planError, reload: reloadPlans } = useApi<{ plans: PricingPlan[] }>('/api/admin/pricing/plans');
+  const { data: ruleData, reload: reloadRules } = useApi<{ rules: PricingRule[] }>('/api/admin/pricing/rules');
+  const { data: resData } = useApi<{ resources: Resource[] }>('/api/admin/resources');
+  const plans = planData?.plans ?? null;
+  const rules = ruleData?.rules ?? [];
+  const resources = resData?.resources ?? [];
   const [editPlan, setEditPlan] = useState<PricingPlan | null>(null);
   const [addPlanOpen, setAddPlanOpen] = useState(false);
   const [editRule, setEditRule] = useState<PricingRule | null>(null);
@@ -25,26 +30,10 @@ export default function PricingPage() {
   const [deleteTarget, setDeleteTarget] = useState<{ kind: 'plan' | 'rule'; id: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const load = useCallback(async () => {
-    try {
-      const [p, r, res, dash] = await Promise.all([
-        api.get<{ plans: PricingPlan[] }>('/api/admin/pricing/plans'),
-        api.get<{ rules: PricingRule[] }>('/api/admin/pricing/rules'),
-        api.get<{ resources: Resource[] }>('/api/admin/resources'),
-        api.get<{ settings: CafeSettings }>('/api/admin/dashboard'),
-      ]);
-      setPlans(p.plans);
-      setRules(r.rules);
-      setResources(res.resources);
-      setSettings(dash.settings);
-    } catch {
-      setPlans([]);
-    }
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  const load = useCallback(() => {
+    reloadPlans();
+    reloadRules();
+  }, [reloadPlans, reloadRules]);
 
   async function remove() {
     if (!deleteTarget) return;
@@ -61,13 +50,13 @@ export default function PricingPage() {
     }
   }
 
-  const sym = settings?.currency_symbol || 'â‚¹';
+  const sym = settings.currency_symbol || '₹';
 
   return (
     <div>
       <PageHeader
         title="Pricing"
-        subtitle="Plans and peak-hour rules â€” active sessions keep their original rate"
+        subtitle="Plans and peak-hour rules — active sessions keep their original rate"
       />
 
       {/* plans */}
@@ -81,7 +70,9 @@ export default function PricingPage() {
           </Button>
         </div>
 
-        {!plans ? (
+        {planError && !planData ? (
+          <ErrorState message={planError.message} onRetry={load} />
+        ) : !plans ? (
           <ListSkeleton rows={4} />
         ) : plans.length === 0 ? (
           <EmptyState title="No pricing plans" message="Add at least one plan per resource type." className="py-8" />
@@ -105,7 +96,7 @@ export default function PricingPage() {
                     <td className="px-4 py-3 text-muted">{p.resource_type.replace(/_/g, ' ')}</td>
                     <td className="px-4 py-3 text-muted">
                       {p.billing_type.replace(/_/g, ' ')}
-                      {p.duration_minutes ? ` Â· ${p.duration_minutes} min` : ''}
+                      {p.duration_minutes ? ` · ${p.duration_minutes} min` : ''}
                     </td>
                     <td className="px-4 py-3 font-bold tabular-nums text-secondary">{formatMoney(p.price, sym)}</td>
                     <td className="px-4 py-3 text-xs font-bold uppercase text-muted">{p.active ? 'Active' : 'Inactive'}</td>
@@ -140,7 +131,7 @@ export default function PricingPage() {
           <EmptyState
             icon={<Clock className="h-10 w-10" />}
             title="No peak pricing rules"
-            message="Optionally charge a different hourly rate during peak hours (e.g. 6â€“11 PM)."
+            message="Optionally charge a different hourly rate during peak hours (e.g. 6–11 PM)."
             className="py-8"
           />
         ) : (
@@ -150,13 +141,13 @@ export default function PricingPage() {
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-bold">{r.name}</p>
                   <p className="text-xs text-muted">
-                    {formatTimeOfDay(r.start_time)} â€“ {formatTimeOfDay(r.end_time)} Â·{' '}
+                    {formatTimeOfDay(r.start_time)} – {formatTimeOfDay(r.end_time)} ·{' '}
                     {r.resource_id
                       ? resources.find((x) => x.id === r.resource_id)?.name ?? 'Specific resource'
                       : r.resource_type
                         ? r.resource_type.replace(/_/g, ' ')
                         : 'All resources'}{' '}
-                    Â· {r.days_of_week.length === 7 ? 'Every day' : r.days_of_week.map(dayName).join(' ')}
+                    · {r.days_of_week.length === 7 ? 'Every day' : r.days_of_week.map(dayName).join(' ')}
                   </p>
                 </div>
                 <span className="font-bold tabular-nums text-warning">{formatMoney(r.price, sym)}/hr</span>
@@ -274,13 +265,13 @@ function PlanModal({
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Billing type" required>
             <Select value={form.billingType} onChange={(e) => setForm({ ...form, billingType: e.target.value })}>
-              <option value="HOURLY">Hourly (â‚¹ per hour)</option>
+              <option value="HOURLY">Hourly (₹ per hour)</option>
               <option value="PER_MINUTE">Per minute</option>
               <option value="FIXED">Fixed (flat per session)</option>
               <option value="PACKAGE">Package (flat up to N minutes)</option>
             </Select>
           </Field>
-          <Field label="Price (â‚¹)" required>
+          <Field label="Price (₹)" required>
             <Input type="number" min={0} step="0.01" value={form.price} onChange={(e) => setForm({ ...form, price: Number(e.target.value) })} required />
           </Field>
         </div>
@@ -401,7 +392,7 @@ function RuleModal({
           {form.scope === 'resource' && (
             <Field label="Resource">
               <Select value={form.resourceId} onChange={(e) => setForm({ ...form, resourceId: e.target.value })}>
-                <option value="">Selectâ€¦</option>
+                <option value="">Select…</option>
                 {resources.map((r) => (
                   <option key={r.id} value={r.id}>{r.name}</option>
                 ))}
@@ -437,7 +428,7 @@ function RuleModal({
           </div>
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Hourly rate during peak (â‚¹)" required>
+          <Field label="Hourly rate during peak (₹)" required>
             <Input type="number" min={0} step="0.01" value={form.price} onChange={(e) => setForm({ ...form, price: Number(e.target.value) })} required />
           </Field>
           <Field label="Priority" hint="Higher wins when multiple rules match">

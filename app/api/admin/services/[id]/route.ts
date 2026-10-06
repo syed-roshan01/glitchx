@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth, jsonError, friendlyError, audit } from '@/lib/supabase/api';
+import { requireAuth, jsonError, friendlyError, audit, dbErrorStatus } from '@/lib/supabase/api';
 import { mapServiceItem } from '@/lib/mappers';
 import { serviceSchema } from '@/lib/validations/schemas';
 
@@ -46,7 +46,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
   const { admin, userId } = ctx;
 
   const { error } = await admin.from('services').delete().eq('id', params.id);
-  if (error) return jsonError(friendlyError(error), 400);
+  if (error) return jsonError(friendlyError(error), dbErrorStatus(error));
   await audit(admin, userId, 'service.deleted', 'service', params.id);
   return NextResponse.json({ ok: true });
 }

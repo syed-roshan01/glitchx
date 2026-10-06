@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth, jsonError, friendlyError, audit } from '@/lib/supabase/api';
+import { requireAuth, jsonError, friendlyError, audit, searchTerm, pageParams } from '@/lib/supabase/api';
 import { mapCustomer } from '@/lib/mappers';
 import { customerSchema } from '@/lib/validations/schemas';
 
@@ -11,10 +11,8 @@ export async function GET(req: NextRequest) {
   if (!ctx) return response!;
   const { admin } = ctx;
 
-  const params = req.nextUrl.searchParams;
-  const q = (params.get('q') ?? '').trim();
-  const limit = Math.min(Number(params.get('limit') ?? 25), 100);
-  const offset = Number(params.get('offset') ?? 0);
+  const q = searchTerm(req.nextUrl.searchParams.get('q'));
+  const { limit, offset } = pageParams(req, 25, 100);
 
   let query = admin
     .from('customers')
@@ -57,14 +55,7 @@ export async function POST(req: NextRequest) {
     .maybeSingle();
 
   if (existing) {
-    const { data, error } = await admin
-      .from('customers')
-      .update({ name: input.name, email: input.email || null, notes: input.notes ?? null })
-      .eq('id', existing.id)
-      .select()
-      .single();
-    if (error) return jsonError(friendlyError(error), 400);
-    return NextResponse.json({ customer: mapCustomer(data) });
+    return jsonError('A customer with this mobile number already exists', 409);
   }
 
   const { data, error } = await admin

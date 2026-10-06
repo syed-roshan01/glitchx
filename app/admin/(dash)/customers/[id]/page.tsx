@@ -1,14 +1,14 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { api } from '@/lib/api-client';
+import { useApi } from '@/lib/use-api';
+import { useSettings } from '@/components/admin/admin-context';
 import { PageHeader, StatCard, EmptyState } from '@/components/ui/misc';
 import { StatusBadge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { formatMoney, formatDateTime, formatDuration, formatDate } from '@/lib/billing/format';
-import type { CafeSettings, Customer, CustomerStats, Invoice, Session } from '@/types';
+import type { Customer, CustomerStats, Invoice, Session } from '@/types';
 import { ArrowLeft, Gamepad2, IndianRupee, CalendarDays, Star, Receipt } from 'lucide-react';
 
 interface CustomerDetail {
@@ -20,20 +20,27 @@ interface CustomerDetail {
 
 export default function CustomerDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const [data, setData] = useState<(CustomerDetail & { settings: CafeSettings }) | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const settings = useSettings();
+  const { data, error, reload } = useApi<CustomerDetail>(id ? `/api/admin/customers/${id}` : null);
 
-  useEffect(() => {
-    Promise.all([
-      api.get<CustomerDetail>(`/api/admin/customers/${id}`),
-      api.get<{ settings: CafeSettings }>('/api/admin/dashboard'),
-    ])
-      .then(([d, s]) => setData({ ...d, settings: s.settings }))
-      .catch((e) => setError(e.message));
-  }, [id]);
-
-  if (error) {
-    return <EmptyState title="Customer not found" message={error} className="mt-10" />;
+  if (error && !data) {
+    return (
+      <EmptyState
+        title="Couldn’t load customer"
+        message={error.message}
+        className="mt-10"
+        action={
+          <div className="flex items-center justify-center gap-4">
+            <button onClick={() => reload()} className="text-sm font-bold text-primary hover:underline">
+              Retry
+            </button>
+            <Link href="/admin/customers" className="text-sm font-bold text-secondary hover:underline">
+              ← Back to customers
+            </Link>
+          </div>
+        }
+      />
+    );
   }
   if (!data) {
     return (
@@ -43,7 +50,7 @@ export default function CustomerDetailPage() {
     );
   }
 
-  const { customer, stats, sessions, invoices, settings } = data;
+  const { customer, stats, sessions, invoices } = data;
   const sym = settings.currency_symbol || '₹';
 
   return (

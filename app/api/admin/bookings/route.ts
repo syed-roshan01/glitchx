@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth, jsonError, friendlyError, audit } from '@/lib/supabase/api';
+import { requireAuth, jsonError, friendlyError, audit, pageParams } from '@/lib/supabase/api';
+import { getCachedSettings } from '@/lib/supabase/settings-cache';
+import { getZonedDayStart } from '@/lib/utils/time';
 import { mapBooking } from '@/lib/mappers';
 import { adminBookingSchema } from '@/lib/validations/schemas';
 import { toIsoOrNull } from '@/lib/utils/misc';
 
 export const dynamic = 'force-dynamic';
 
-/** GET /api/admin/bookings?status=&upcoming=1&limit=&offset= */
+/** GET /api/admin/bookings?status=&upcoming=1&date=YYYY-MM-DD&limit=&offset= */
 export async function GET(req: NextRequest) {
   const { ctx, response } = await requireAuth();
   if (!ctx) return response!;
@@ -15,17 +17,24 @@ export async function GET(req: NextRequest) {
   const params = req.nextUrl.searchParams;
   const status = params.get('status');
   const upcoming = params.get('upcoming');
-  const limit = Math.min(Number(params.get('limit') ?? 50), 200);
-  const offset = Number(params.get('offset') ?? 0);
+  const date = params.get('date');
+  const { limit, offset } = pageParams(req, 50, 200);
 
   let query = admin
     .from('bookings')
     .select('*, resources(name, type)', { count: 'exact' })
-    .order('start_time', { ascending: upcoming === '1' })
+    .order('start_time', { ascending: upcoming === '1' || !!date })
     .range(offset, offset + limit - 1);
 
   if (status) query = query.eq('status', status);
   if (upcoming === '1') query = query.gte('start_time', new Date().toISOString());
+  if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    // whole local day in the cafe timezone
+    const { timezone } = await getCachedSettings(admin);
+    const dayStart = getZonedDayStart(timezone, new Date(`${date}T12:00:00Z`));
+    const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+    query = query.gte('start_time', dayStart.toISOString()).lt('start_time', dayEnd.toISOString());
+  }
 
   const { data, error, count } = await query;
   if (error) return jsonError(friendlyError(error), 400);

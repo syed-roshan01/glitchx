@@ -1,9 +1,10 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api } from '@/lib/api-client';
-import { PageHeader, EmptyState } from '@/components/ui/misc';
+import { useApi, invalidate } from '@/lib/use-api';
+import { PageHeader, EmptyState, ErrorState } from '@/components/ui/misc';
 import { ListSkeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { Input, Field } from '@/components/ui/input';
@@ -16,31 +17,21 @@ import { UserPlus, Search, ChevronLeft, ChevronRight, Users } from 'lucide-react
 export default function CustomersPage() {
   const toast = useToast();
   const [query, setQuery] = useState('');
-  const [customers, setCustomers] = useState<Customer[] | null>(null);
-  const [total, setTotal] = useState(0);
+  const [debouncedQuery, setDebouncedQuery] = useState('');
   const [page, setPage] = useState(0);
   const [addOpen, setAddOpen] = useState(false);
-  const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const load = useCallback(async () => {
-    try {
-      const params = new URLSearchParams({ limit: '20', offset: String(page * 20) });
-      if (query.trim()) params.set('q', query.trim());
-      const res = await api.get<{ customers: Customer[]; total: number }>(`/api/admin/customers?${params}`);
-      setCustomers(res.customers);
-      setTotal(res.total);
-    } catch {
-      setCustomers([]);
-    }
-  }, [query, page]);
 
   useEffect(() => {
-    if (debounce.current) clearTimeout(debounce.current);
-    debounce.current = setTimeout(load, 250);
-    return () => {
-      if (debounce.current) clearTimeout(debounce.current);
-    };
-  }, [load]);
+    const t = setTimeout(() => setDebouncedQuery(query), 250);
+    return () => clearTimeout(t);
+  }, [query]);
+
+  const params = new URLSearchParams({ limit: '20', offset: String(page * 20) });
+  if (debouncedQuery.trim()) params.set('q', debouncedQuery.trim());
+  const { data, error, reload } = useApi<{ customers: Customer[]; total: number }>(`/api/admin/customers?${params}`);
+  const customers = data?.customers ?? null;
+  const total = data?.total ?? 0;
+  const load = () => invalidate('/api/admin/customers');
 
   return (
     <div>
@@ -68,7 +59,9 @@ export default function CustomersPage() {
         />
       </div>
 
-      {!customers ? (
+      {error && !data ? (
+        <ErrorState message={error.message} onRetry={reload} />
+      ) : !customers ? (
         <ListSkeleton rows={6} />
       ) : customers.length === 0 ? (
         <EmptyState

@@ -37,10 +37,12 @@ export async function middleware(request: NextRequest) {
     }
   );
 
-  // IMPORTANT: do not remove — refreshes the session token
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // Verifies the access token LOCALLY against the project's cached JWKS
+  // (asymmetric ES256 keys) — no Auth server round-trip per request.
+  // Expired tokens are refreshed here via the refresh-token cookie.
+  const { data: claimsData } = await supabase.auth.getClaims();
+  const sub = claimsData?.claims?.sub;
+  const user = sub ? { id: sub } : null;
 
   const path = request.nextUrl.pathname;
   const isLogin = path === '/admin/login';
@@ -58,18 +60,14 @@ export async function middleware(request: NextRequest) {
     return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
   }
 
-  if (user && isLogin) {
-    const url = request.nextUrl.clone();
-    url.pathname = '/admin';
-    url.search = '';
-    return NextResponse.redirect(url);
-  }
-
   // ---- mint the signed identity for downstream server code ----
   let identityToken: string | null = null;
   if (user) {
     let cached = profileCache.get(user.id);
     if (!cached || cached.exp < Date.now()) {
+      // never sign a token from an expired entry if the re-fetch fails
+      profileCache.delete(user.id);
+      cached = undefined;
       // profiles are self-readable via RLS with the user-scoped client
       const { data: p } = await supabase
         .from('profiles')
@@ -86,14 +84,26 @@ export async function middleware(request: NextRequest) {
         profileCache.set(user.id, cached);
       }
     }
-    if (cached) {
-      identityToken = await signIdentity({
-        sub: user.id,
-        role: cached.role,
-        name: cached.name,
-        active: cached.active,
-      });
+    if (cached && cached.active) {
+      try {
+        identityToken = await signIdentity({
+          sub: user.id,
+          role: cached.role,
+          name: cached.name,
+          active: cached.active,
+        });
+      } catch {
+        identityToken = null; // downstream falls back to full verification
+      }
     }
+  }
+
+  // signed-in ACTIVE staff don't need the login page
+  if (identityToken && isLogin) {
+    const url = request.nextUrl.clone();
+    url.pathname = '/admin';
+    url.search = '';
+    return NextResponse.redirect(url);
   }
 
   // forward request headers (incl. refreshed cookies + signed identity) and

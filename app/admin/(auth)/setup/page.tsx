@@ -40,31 +40,58 @@ export default function SetupPage() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [step, setStep] = useState(0); // 0 = account, then 1..6
   const [busy, setBusy] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
-    const supabase = createBrowserSupabaseClient();
-    const [{ data: s }, { data: { user } }] = await Promise.all([
-      supabase.rpc('public_setup_status'),
-      supabase.auth.getUser(),
-    ]);
-    setStatus(s as SetupStatus);
-    setSignedIn(!!user);
-    if (user) {
-      const { data: profile } = await supabase.from('profiles').select('role').eq('id', user.id).single();
-      setIsAdmin(profile?.role === 'ADMIN');
+  const refresh = useCallback(async (): Promise<{ s: SetupStatus | null; user: unknown }> => {
+    try {
+      const supabase = createBrowserSupabaseClient();
+      const [{ data: s, error: sErr }, { data: { user } }] = await Promise.all([
+        supabase.rpc('public_setup_status'),
+        supabase.auth.getUser(),
+      ]);
+      if (sErr || !s) {
+        setLoadError(sErr?.message || 'Could not read the setup status.');
+        return { s: null, user };
+      }
+      setLoadError(null);
+      setStatus(s as SetupStatus);
+      setSignedIn(!!user);
+      if (user) {
+        const { data: profile } = await supabase.from('profiles').select('role').eq('id', user.id).single();
+        setIsAdmin(profile?.role === 'ADMIN');
+      }
+      return { s: s as SetupStatus, user };
+    } catch (e: any) {
+      setLoadError(e?.message || 'Network error.');
+      return { s: null, user: null };
     }
-    return { s, user };
   }, []);
 
-  useEffect(() => {
-    (async () => {
-      const { s, user } = await refresh();
-      if (!s.needs_admin && !user) {
-        // setup already done — go to login
-        router.replace('/admin/login');
-      }
-    })();
+  const init = useCallback(async () => {
+    const { s, user } = await refresh();
+    if (s && !s.needs_admin && !user) {
+      // setup already done — go to login
+      router.replace('/admin/login');
+    }
   }, [refresh, router]);
+
+  useEffect(() => {
+    init();
+  }, [init]);
+
+  if (!status && loadError) {
+    return (
+      <div className="flex min-h-dvh items-center justify-center px-4">
+        <div className="glass max-w-sm rounded-2xl p-6 text-center shadow-card">
+          <h1 className="text-lg font-bold">Couldn’t load setup</h1>
+          <p className="mt-2 text-sm text-muted">{loadError}</p>
+          <Button className="mt-4" variant="outline" onClick={() => init()}>
+            Retry
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   if (!status) {
     return (
@@ -189,6 +216,7 @@ function AccountStep({
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [needsEmailConfirm, setNeedsEmailConfirm] = useState(false);
+  const [pendingActivation, setPendingActivation] = useState(false);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -214,14 +242,32 @@ function AccountStep({
         return;
       }
       if (claimed === false) {
-        toast.info('An admin already exists — signing you in as staff.');
-      } else {
-        toast.success('Admin account created!');
+        // new sign-ups are inactive unless they claim the first admin slot
+        await supabase.auth.signOut();
+        setPendingActivation(true);
+        return;
       }
+      toast.success('Admin account created!');
       onDone();
+    } catch (err: any) {
+      toast.error(err?.message || 'Network error. Please try again.');
     } finally {
       setBusy(false);
     }
+  }
+
+  if (pendingActivation) {
+    return (
+      <div className="space-y-4 text-center" role="alert">
+        <h2 className="text-lg font-bold">Account created</h2>
+        <p className="text-sm text-muted">
+          An admin already exists. Your account was created but must be activated by an admin before you can sign in.
+        </p>
+        <a href="/admin/login" className="inline-block text-sm font-bold text-secondary hover:underline">
+          Go to sign in
+        </a>
+      </div>
+    );
   }
 
   if (needsEmailConfirm) {

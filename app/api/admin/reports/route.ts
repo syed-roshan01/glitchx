@@ -12,7 +12,7 @@ export const dynamic = 'force-dynamic';
  * session stats and peak hours over the range (cafe timezone).
  */
 export async function GET(req: NextRequest) {
-  const { ctx, response } = await requireAuth();
+  const { ctx, response } = await requireAuth(['ADMIN', 'MANAGER']);
   if (!ctx) return response!;
   const { admin } = ctx;
 

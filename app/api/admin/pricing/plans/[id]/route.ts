@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth, jsonError, friendlyError, audit } from '@/lib/supabase/api';
+import { requireAuth, jsonError, friendlyError, audit, dbErrorStatus } from '@/lib/supabase/api';
 import { mapPricingPlan } from '@/lib/mappers';
 import { pricingPlanSchema } from '@/lib/validations/schemas';
 
@@ -29,11 +29,20 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (input.durationMinutes !== undefined) update.duration_minutes = input.durationMinutes ?? null;
   if (input.active !== undefined) update.active = input.active;
 
-  if (input.billingType === 'PACKAGE' && input.durationMinutes == null) {
+  const { data: before } = await admin
+    .from('pricing_plans')
+    .select('price, billing_type, duration_minutes')
+    .eq('id', params.id)
+    .single();
+  if (!before) return jsonError('Plan not found', 404);
+
+  // validate against the RESULTING plan, not just the patch
+  const nextType = input.billingType ?? before.billing_type;
+  const nextDuration =
+    input.durationMinutes !== undefined ? input.durationMinutes ?? null : before.duration_minutes;
+  if (nextType === 'PACKAGE' && !nextDuration) {
     return jsonError('Package plans need a duration');
   }
-
-  const { data: before } = await admin.from('pricing_plans').select('price').eq('id', params.id).single();
   const { data, error } = await admin
     .from('pricing_plans')
     .update(update)
@@ -60,7 +69,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
   const { admin, userId } = ctx;
 
   const { error } = await admin.from('pricing_plans').delete().eq('id', params.id);
-  if (error) return jsonError(friendlyError(error), 400);
+  if (error) return jsonError(friendlyError(error), dbErrorStatus(error));
   await audit(admin, userId, 'pricing.plan_deleted', 'pricing_plan', params.id);
   return NextResponse.json({ ok: true });
 }

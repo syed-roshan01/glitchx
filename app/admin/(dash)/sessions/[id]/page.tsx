@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { api } from '@/lib/api-client';
+import { useApi, invalidate } from '@/lib/use-api';
+import { useSettings } from '@/components/admin/admin-context';
 import { useNow } from '@/hooks/use-now';
 import { useRealtime, useDebouncedCallback } from '@/hooks/use-realtime';
 import { PageHeader, EmptyState } from '@/components/ui/misc';
@@ -17,7 +19,7 @@ import { formatMoney, formatDuration, formatClock, formatDateTime } from '@/lib/
 import { AddItemModal } from '@/components/admin/add-item-modal';
 import { AddServiceModal } from '@/components/admin/add-service-modal';
 import { EndSessionModal } from '@/components/admin/end-session-modal';
-import type { CafeSettings, PricingRule, Session, SessionItem } from '@/types';
+import type { CafeSettings, Invoice, PricingRule, Session, SessionItem } from '@/types';
 import {
   CupSoda, Sparkles, Pause, Play, Square, Percent, Receipt, ArrowLeft,
   Phone, Gamepad2, Clock, NotebookPen,
@@ -35,62 +37,35 @@ export default function SessionDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const toast = useToast();
+  const settings = useSettings();
   const now = useNow(1000);
-  const [data, setData] = useState<SessionDetail | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [addItemOpen, setAddItemOpen] = useState(false);
   const [addServiceOpen, setAddServiceOpen] = useState(false);
   const [endOpen, setEndOpen] = useState(false);
   const [discountOpen, setDiscountOpen] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
+  const [pauseBusy, setPauseBusy] = useState(false);
 
-  const load = useCallback(async () => {
-    try {
-      const d = await api.get<SessionDetail>(`/api/admin/sessions/${id}`);
-      setData(d);
-      setError(null);
-    } catch (e: any) {
-      setError(e.message);
-    }
-  }, [id]);
+  const key = id ? `/api/admin/sessions/${id}` : null;
+  const { data, error, reload, mutate } = useApi<SessionDetail>(key);
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  const refetch = useDebouncedCallback(reload, 400);
+  useRealtime('sessions', refetch, { filter: id ? `id=eq.${id}` : undefined });
+  useRealtime('session_items', refetch, { filter: id ? `session_id=eq.${id}` : undefined });
 
-  const refetch = useDebouncedCallback(load, 400);
-  useRealtime('sessions', refetch);
-  useRealtime('session_items', refetch);
+  const session = data?.session;
+  const items = data?.items;
+  const rules = data?.rules;
+  const live = session?.status === 'ACTIVE' || session?.status === 'PAUSED';
 
-  if (error) {
-    return (
-      <EmptyState
-        title="Session not found"
-        message={error}
-        className="mt-10"
-        action={
-          <Link href="/admin/sessions" className="text-sm font-bold text-secondary hover:underline">
-            ← Back to sessions
-          </Link>
-        }
-      />
-    );
-  }
-  if (!data) {
-    return (
-      <div className="flex h-64 items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-border-strong border-t-primary" />
-      </div>
-    );
-  }
-
-  const { session, items, settings, rules } = data;
-  const sym = settings.currency_symbol || '₹';
-  const live = session.status === 'ACTIVE' || session.status === 'PAUSED';
+  // Completed sessions: the API returns the invoice generated for this session.
+  const invoiceSearch = session ? session.customer_mobile || session.customer_name || '' : '';
+  const invoice = (data as { invoice?: Pick<Invoice, 'id' | 'invoice_number'> | null } | undefined)?.invoice ?? null;
 
   // live bill (single source of truth: billing engine from DB timestamps)
+  // NOTE: every hook must run before the early returns below.
   const breakdown = useMemo(() => {
-    if (!live || !session.actual_start_time) return null;
+    if (!session || !items || !rules || !live || !session.actual_start_time) return null;
     const itemAmount = items
       .filter((i) => ['FOOD', 'DRINK', 'OTHER'].includes(i.item_type))
       .reduce((s, i) => s + i.total_price, 0);
@@ -121,17 +96,69 @@ export default function SessionDetailPage() {
     });
   }, [live, session, items, settings, rules, now]);
 
+  const load = useCallback(() => {
+    reload();
+    invalidate('/api/admin/sessions');
+    invalidate('/api/admin/dashboard');
+  }, [reload]);
+
+  if (error && !data) {
+    return (
+      <EmptyState
+        title="Couldn’t load session"
+        message={error.message}
+        className="mt-10"
+        action={
+          <div className="flex items-center justify-center gap-4">
+            <button onClick={() => reload()} className="text-sm font-bold text-primary hover:underline">
+              Retry
+            </button>
+            <Link href="/admin/sessions" className="text-sm font-bold text-secondary hover:underline">
+              ← Back to sessions
+            </Link>
+          </div>
+        }
+      />
+    );
+  }
+  if (!data || !session || !items || !rules) {
+    return (
+      <div className="flex h-64 items-center justify-center">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-border-strong border-t-primary" />
+      </div>
+    );
+  }
+
+  const sym = settings.currency_symbol || '₹';
   const bill = breakdown ?? data.breakdown;
 
   async function togglePause() {
+    if (!session || pauseBusy) return;
+    const resuming = session.status === 'PAUSED';
+    const prev = data;
+    setPauseBusy(true);
+    // optimistic: flip status immediately; the refetch brings exact timestamps
+    mutate((d) =>
+      d
+        ? {
+            ...d,
+            session: {
+              ...d.session,
+              status: resuming ? 'ACTIVE' : 'PAUSED',
+              paused_at: resuming ? null : new Date().toISOString(),
+            },
+          }
+        : d
+    );
     try {
-      await api.patch(`/api/admin/sessions/${session.id}`, {
-        action: session.status === 'PAUSED' ? 'resume' : 'pause',
-      });
-      toast.success(session.status === 'PAUSED' ? 'Session resumed' : 'Session paused — timer stopped');
+      await api.patch(`/api/admin/sessions/${session.id}`, { action: resuming ? 'resume' : 'pause' });
+      toast.success(resuming ? 'Session resumed' : 'Session paused — timer stopped');
       load();
     } catch (e: any) {
+      mutate(() => prev);
       toast.error(e.message);
+    } finally {
+      setPauseBusy(false);
     }
   }
 
@@ -190,6 +217,16 @@ export default function SessionDetailPage() {
               ) : (
                 <p className="mt-1 text-xs text-warning">Payment pending</p>
               )}
+              <Link
+                href={
+                  invoice
+                    ? `/admin/invoices/${invoice.id}`
+                    : `/admin/invoices?q=${encodeURIComponent(invoiceSearch)}`
+                }
+                className="mt-3 inline-flex h-10 items-center gap-2 rounded-xl border border-border bg-surface-2 px-4 text-sm font-bold hover:bg-surface-3"
+              >
+                <Receipt className="h-4 w-4" /> {invoice ? `View invoice ${invoice.invoice_number}` : 'Find invoice'}
+              </Link>
             </div>
           )}
         </div>
@@ -281,7 +318,7 @@ export default function SessionDetailPage() {
       {live && (
         <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
           {settings.pause_enabled && (
-            <Button variant={session.status === 'PAUSED' ? 'success' : 'outline'} onClick={togglePause}>
+            <Button variant={session.status === 'PAUSED' ? 'success' : 'outline'} onClick={togglePause} disabled={pauseBusy}>
               {session.status === 'PAUSED' ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
               {session.status === 'PAUSED' ? 'Resume' : 'Pause'}
             </Button>
@@ -289,14 +326,6 @@ export default function SessionDetailPage() {
           <Button variant="outline" onClick={() => setDiscountOpen(true)}>
             <Percent className="h-4 w-4" /> Discount
           </Button>
-          {session.status === 'COMPLETED' && (
-            <Link
-              href={`/admin/invoices?focus=${session.id}`}
-              className="inline-flex h-10 items-center gap-2 rounded-xl border border-border px-4 text-sm font-bold"
-            >
-              <Receipt className="h-4 w-4" /> View invoice
-            </Link>
-          )}
           <Button variant="danger" size="lg" onClick={() => setEndOpen(true)}>
             <Square className="h-4 w-4" /> End Session
           </Button>
@@ -320,6 +349,7 @@ export default function SessionDetailPage() {
         onClose={() => setEndOpen(false)}
         onEnded={(res) => {
           setEndOpen(false);
+          invalidate('/api/admin');
           toast.success(`Invoice ${res.invoiceNumber} created`);
           router.push(`/admin/invoices/${res.invoiceId}`);
         }}
@@ -377,6 +407,12 @@ function DiscountModal({
   const [type, setType] = useState<'PERCENT' | 'FIXED' | null>(session.discount_type ?? null);
   const [value, setValue] = useState<number>(session.discount_value ?? 0);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setType(session.discount_type ?? null);
+    setValue(session.discount_value ?? 0);
+  }, [open, session.discount_type, session.discount_value]);
 
   async function save() {
     setBusy(true);

@@ -1,13 +1,15 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import Link from 'next/link';
-import { api } from '@/lib/api-client';
+import { useApi, invalidate } from '@/lib/use-api';
+import { useSettings } from '@/components/admin/admin-context';
+import { zonedDateKey } from '@/lib/utils/time';
 import { useRealtime, useDebouncedCallback } from '@/hooks/use-realtime';
-import { PageHeader, EmptyState, StatCard } from '@/components/ui/misc';
+import { PageHeader, EmptyState, StatCard, ErrorState } from '@/components/ui/misc';
 import { ListSkeleton } from '@/components/ui/skeleton';
 import { formatMoney, formatDateTime } from '@/lib/billing/format';
-import type { CafeSettings, Payment } from '@/types';
+import type { Payment } from '@/types';
 import { CreditCard, IndianRupee, Banknote, Smartphone, Wallet } from 'lucide-react';
 
 const METHOD_ICONS: Record<string, React.ReactNode> = {
@@ -18,35 +20,26 @@ const METHOD_ICONS: Record<string, React.ReactNode> = {
 };
 
 export default function PaymentsPage() {
-  const [payments, setPayments] = useState<Payment[] | null>(null);
-  const [settings, setSettings] = useState<CafeSettings | null>(null);
+  const settings = useSettings();
   const [page, setPage] = useState(0);
-  const [total, setTotal] = useState(0);
+  const { data, error, reload } = useApi<{ payments: Payment[]; total: number; todayTotal?: number }>(
+    `/api/admin/payments?limit=30&offset=${page * 30}`
+  );
 
-  const load = () =>
-    Promise.all([
-      api.get<{ payments: Payment[]; total: number }>(`/api/admin/payments?limit=30&offset=${page * 30}`),
-      api.get<{ settings: CafeSettings }>('/api/admin/dashboard'),
-    ])
-      .then(([p, s]) => {
-        setPayments(p.payments);
-        setTotal(p.total);
-        setSettings(s.settings);
-      })
-      .catch(() => setPayments([]));
-
-  useEffect(() => {
-    load();
-  }, [page]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const refetch = useDebouncedCallback(load, 400);
+  const refetch = useDebouncedCallback(() => invalidate('/api/admin/payments'), 400);
   useRealtime('invoices', refetch);
 
-  if (!payments || !settings) return <ListSkeleton rows={8} />;
+  if (error && !data) return <ErrorState message={error.message} onRetry={reload} />;
+  if (!data) return <ListSkeleton rows={8} />;
 
+  const { payments, total } = data;
   const sym = settings.currency_symbol || '₹';
-  const today = payments.filter((p) => new Date(p.paid_at ?? p.created_at).toDateString() === new Date().toDateString());
-  const todayTotal = today.reduce((s, p) => s + p.amount, 0);
+  // "today" in the cafe timezone, not the browser's
+  const todayKey = zonedDateKey(new Date(), settings.timezone);
+  const today = payments.filter((p) => zonedDateKey(new Date(p.paid_at ?? p.created_at), settings.timezone) === todayKey);
+  // prefer the server's full-day total (not limited to this page)
+  const todayTotal =
+    typeof data.todayTotal === 'number' ? data.todayTotal : today.reduce((s, p) => s + p.amount, 0);
   const byMethod = today.reduce<Record<string, number>>((acc, p) => {
     acc[p.payment_method] = (acc[p.payment_method] ?? 0) + p.amount;
     return acc;

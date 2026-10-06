@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth, jsonError, friendlyError } from '@/lib/supabase/api';
+import { requireAuth, jsonError, friendlyError, searchTerm, pageParams } from '@/lib/supabase/api';
 import { mapInvoice } from '@/lib/mappers';
 
 export const dynamic = 'force-dynamic';
@@ -11,10 +11,9 @@ export async function GET(req: NextRequest) {
   const { admin } = ctx;
 
   const params = req.nextUrl.searchParams;
-  const q = (params.get('q') ?? '').trim();
+  const q = searchTerm(params.get('q'));
   const status = params.get('status');
-  const limit = Math.min(Number(params.get('limit') ?? 25), 100);
-  const offset = Number(params.get('offset') ?? 0);
+  const { limit, offset } = pageParams(req, 25, 100);
 
   let query = admin
     .from('invoices')

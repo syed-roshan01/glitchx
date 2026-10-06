@@ -1,7 +1,17 @@
 /** Map Postgres RPC error codes to human-readable messages.
  *  Pure — safe to import on the client and server. */
-export function friendlyError(err: { message?: string } | null | undefined): string {
+export function friendlyError(err: { message?: string; code?: string } | null | undefined): string {
   const msg = err?.message ?? '';
+  // Postgres constraint errors (surfaced by PostgREST)
+  if (err?.code === '23503' || /foreign key constraint/i.test(msg)) {
+    return 'This record is in use (e.g. by sessions, bookings or invoices). Deactivate it instead of deleting.';
+  }
+  if (err?.code === '23505' || /duplicate key value/i.test(msg)) {
+    return 'A record with these details already exists.';
+  }
+  if (err?.code === '22P02' || /invalid input syntax for type uuid/i.test(msg)) {
+    return 'Record not found.';
+  }
   const code = msg.match(/([A-Z_]{4,})/)?.[1];
   switch (code) {
     case 'SLOT_TAKEN':
@@ -57,6 +67,16 @@ export function friendlyError(err: { message?: string } | null | undefined): str
       return 'Pause is disabled in cafe settings.';
     case 'BILLING_MISMATCH':
       return 'Billing could not be verified. Please retry.';
+    case 'BOOKING_NOT_CANCELLABLE':
+      return 'This booking can no longer be cancelled online. Please contact the cafe.';
+    case 'INVALID_AMOUNT':
+      return 'Please enter a valid amount.';
+    case 'INVOICE_NOT_FOUND':
+      return 'Invoice not found.';
+    case 'INVOICE_VOID':
+      return 'This invoice has been voided.';
+    case 'PAYMENT_EXCEEDS_BALANCE':
+      return 'Payment exceeds the remaining balance.';
     case 'NOT_AUTHENTICATED':
       return 'You must be signed in.';
     default:

@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Modal } from '@/components/ui/modal';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/toast';
 import { api } from '@/lib/api-client';
+import { useApi } from '@/lib/use-api';
 import { formatMoney } from '@/lib/billing/format';
 import type { ServiceItem, SessionItem } from '@/types';
 import { Plus, Sparkles } from 'lucide-react';
@@ -22,19 +23,13 @@ export function AddServiceModal({
   onAdded: (items: SessionItem[]) => void;
 }) {
   const toast = useToast();
-  const [services, setServices] = useState<ServiceItem[]>([]);
-  const [loading, setLoading] = useState(false);
+  const { data, loading, reload } = useApi<{ services: ServiceItem[] }>(open ? '/api/admin/services' : null);
+  const services = useMemo(() => (data?.services ?? []).filter((s) => s.active), [data]);
   const [busyId, setBusyId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!open) return;
-    setLoading(true);
-    api
-      .get<{ services: ServiceItem[] }>('/api/admin/services')
-      .then((r) => setServices(r.services.filter((s) => s.active)))
-      .catch((e) => toast.error(e.message))
-      .finally(() => setLoading(false));
-  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (open) reload();
+  }, [open, reload]);
 
   async function add(service: ServiceItem) {
     setBusyId(service.id);

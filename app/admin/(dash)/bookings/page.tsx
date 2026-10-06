@@ -1,11 +1,14 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api-client';
+import { useApi, invalidate } from '@/lib/use-api';
+import { useSettings } from '@/components/admin/admin-context';
+import { zonedDateKey } from '@/lib/utils/time';
 import { useRealtime, useDebouncedCallback } from '@/hooks/use-realtime';
-import { PageHeader, EmptyState, StatCard } from '@/components/ui/misc';
+import { PageHeader, EmptyState, StatCard, ErrorState } from '@/components/ui/misc';
 import { ListSkeleton } from '@/components/ui/skeleton';
 import { StatusBadge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -13,7 +16,7 @@ import { Modal, ConfirmDialog } from '@/components/ui/modal';
 import { Input, Field, Select } from '@/components/ui/input';
 import { useToast } from '@/components/ui/toast';
 import { formatMoney, formatClock, formatDate, toLocalInputValue } from '@/lib/billing/format';
-import type { Booking, CafeSettings, Customer, Resource, WaitlistEntry } from '@/types';
+import type { Booking, Customer, Resource, WaitlistEntry } from '@/types';
 import {
   CalendarPlus, Check, X, LogIn, CalendarClock, UserPlus, Hourglass,
   ChevronLeft, ChevronRight, Search,
@@ -23,58 +26,56 @@ type Tab = 'upcoming' | 'pending' | 'today' | 'all';
 
 export default function BookingsPage() {
   const params = useSearchParams();
+  const router = useRouter();
   const toast = useToast();
+  const settings = useSettings();
   const [tab, setTab] = useState<Tab>('upcoming');
-  const [bookings, setBookings] = useState<Booking[] | null>(null);
-  const [waitlist, setWaitlist] = useState<WaitlistEntry[]>([]);
-  const [settings, setSettings] = useState<CafeSettings | null>(null);
   const [page, setPage] = useState(0);
-  const [total, setTotal] = useState(0);
   const [newOpen, setNewOpen] = useState(params.get('new') === '1');
   const [cancelId, setCancelId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const load = useCallback(async () => {
-    try {
-      const search = new URLSearchParams({ limit: '20', offset: String(page * 20) });
-      if (tab === 'upcoming') search.set('upcoming', '1');
-      else if (tab === 'pending') search.set('status', 'PENDING');
-      else if (tab === 'today') search.set('upcoming', '1');
+  const search = new URLSearchParams({ limit: '20', offset: String(page * 20) });
+  if (tab === 'upcoming') search.set('upcoming', '1');
+  else if (tab === 'pending') search.set('status', 'PENDING');
+  // whole cafe-local day (the API resolves the date in the cafe timezone)
+  else if (tab === 'today') search.set('date', zonedDateKey(new Date(), settings.timezone));
 
-      const [b, w, dash] = await Promise.all([
-        api.get<{ bookings: Booking[]; total: number }>(`/api/admin/bookings?${search}`),
-        api.get<{ waitlist: WaitlistEntry[] }>('/api/admin/waitlist'),
-        api.get<{ settings: CafeSettings }>('/api/admin/dashboard'),
-      ]);
-      setBookings(b.bookings);
-      setTotal(b.total);
-      setWaitlist(w.waitlist);
-      setSettings(dash.settings);
-    } catch {
-      setBookings([]);
-    }
-  }, [tab, page]);
+  const bookingsKey = `/api/admin/bookings?${search}`;
+  const { data, error, reload, mutate } = useApi<{ bookings: Booking[]; total: number }>(bookingsKey);
+  const { data: wData, reload: reloadWaitlist } = useApi<{ waitlist: WaitlistEntry[] }>('/api/admin/waitlist');
+  const bookings = data?.bookings ?? null;
+  const total = data?.total ?? 0;
+  const waitlist = wData?.waitlist ?? [];
 
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  const refetch = useDebouncedCallback(load, 400);
-  useRealtime('bookings', refetch);
-  useRealtime('waitlist', refetch);
+  const refetchBookings = useDebouncedCallback(() => invalidate('/api/admin/bookings'), 400);
+  const refetchWaitlist = useDebouncedCallback(reloadWaitlist, 400);
+  useRealtime('bookings', refetchBookings);
+  useRealtime('waitlist', refetchWaitlist);
 
   async function action(id: string, act: string, extra?: Record<string, unknown>) {
     setBusy(true);
+    const prev = data;
+    // optimistic status change for simple transitions
+    const optimistic: Record<string, Booking['status']> = { confirm: 'CONFIRMED', cancel: 'CANCELLED' };
+    if (optimistic[act]) {
+      mutate((d) =>
+        d ? { ...d, bookings: d.bookings.map((b) => (b.id === id ? { ...b, status: optimistic[act] } : b)) } : d
+      );
+    }
     try {
       const res = await api.patch<{ sessionId?: string }>(`/api/admin/bookings/${id}`, { action: act, ...extra });
+      invalidate('/api/admin/bookings');
+      invalidate('/api/admin/dashboard');
       if (act === 'check-in' && res.sessionId) {
+        invalidate('/api/admin/sessions');
         toast.success('Checked in — session started');
-        window.location.href = `/admin/sessions/${res.sessionId}`;
+        router.push(`/admin/sessions/${res.sessionId}`);
         return;
       }
       toast.success('Booking updated');
-      refetch();
     } catch (e: any) {
+      if (optimistic[act]) mutate(() => prev);
       toast.error(e.message);
     } finally {
       setBusy(false);
@@ -89,22 +90,21 @@ export default function BookingsPage() {
         '/api/admin/waitlist',
         { id, action: 'assign' }
       );
-      const q = new URLSearchParams({
-        customerId: res.customerId,
-        name: res.name,
-        mobile: res.mobile,
-      });
+      // only ids in the URL — the new-session page fetches the customer
+      const q = new URLSearchParams({ customerId: res.customerId });
       if (res.resourceId) q.set('resourceId', res.resourceId);
       if (res.requestedDurationMinutes) q.set('durationMinutes', String(res.requestedDurationMinutes));
+      invalidate('/api/admin/waitlist');
       toast.success(`${res.name} is up — start their session`);
-      window.location.href = `/admin/sessions/new?${q}`;
+      router.push(`/admin/sessions/new?${q}`);
     } catch (e: any) {
       toast.error(e.message);
+    } finally {
       setBusy(false);
     }
   }
 
-  const sym = settings?.currency_symbol || '₹';
+  const sym = settings.currency_symbol || '₹';
   const pendingCount = bookings?.filter((b) => b.status === 'PENDING').length ?? 0;
 
   return (
@@ -159,7 +159,7 @@ export default function BookingsPage() {
               tab === t ? 'bg-primary text-white shadow-glow-sm' : 'text-muted hover:text-content'
             }`}
           >
-            {t === 'today' ? 'Upcoming' : t}
+            {t}
             {t === 'pending' && pendingCount > 0 && (
               <span className="ml-1.5 rounded-full bg-warning/20 px-1.5 text-xs text-warning">{pendingCount}</span>
             )}
@@ -167,7 +167,9 @@ export default function BookingsPage() {
         ))}
       </div>
 
-      {!bookings || !settings ? (
+      {error && !data ? (
+        <ErrorState message={error.message} onRetry={reload} />
+      ) : !bookings ? (
         <ListSkeleton rows={5} />
       ) : bookings.length === 0 ? (
         <EmptyState
@@ -248,7 +250,7 @@ export default function BookingsPage() {
         </div>
       )}
 
-      <NewBookingModal open={newOpen} onClose={() => setNewOpen(false)} onCreated={refetch} />
+      <NewBookingModal open={newOpen} onClose={() => setNewOpen(false)} onCreated={() => { invalidate('/api/admin/bookings'); invalidate('/api/admin/dashboard'); }} />
       <ConfirmDialog
         open={!!cancelId}
         onClose={() => setCancelId(null)}
@@ -301,20 +303,23 @@ function NewBookingModal({
   const [query, setQuery] = useState('');
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [customerId, setCustomerId] = useState<string | null>(null);
-  const [resources, setResources] = useState<Resource[]>([]);
+  const { data: resData } = useApi<{ resources: Resource[] }>(open ? '/api/admin/resources' : null);
+  // only active resources that aren't under maintenance can be booked
+  const resources = useMemo(
+    () => (resData?.resources ?? []).filter((x) => x.active && x.status === 'ACTIVE'),
+    [resData]
+  );
   const [resourceId, setResourceId] = useState('');
   const [startTime, setStartTime] = useState(toLocalInputValue(new Date(Date.now() + 30 * 60000)));
   const [duration, setDuration] = useState(60);
   const [notes, setNotes] = useState('');
   const [busy, setBusy] = useState(false);
 
+  // default to the first selectable resource (keep a still-valid choice)
   useEffect(() => {
     if (!open) return;
-    api.get<{ resources: Resource[] }>('/api/admin/resources').then((r) => {
-      setResources(r.resources.filter((x) => x.active));
-      if (r.resources[0]) setResourceId(r.resources[0].id);
-    }).catch(() => {});
-  }, [open]);
+    if (!resources.some((r) => r.id === resourceId)) setResourceId(resources[0]?.id ?? '');
+  }, [open, resources, resourceId]);
 
   useEffect(() => {
     if (query.trim().length < 2) { setCustomers([]); return; }

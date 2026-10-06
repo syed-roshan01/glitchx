@@ -51,6 +51,11 @@ export async function GET() {
         .order('created_at'),
     ]);
 
+    // activation runs in the same batch for speed; anything it activates
+    // triggers a realtime event and the client refetches immediately.
+    const failed = [invoicesRes, activeRes, todaySessionsRes, resourcesRes].find((r) => r.error);
+    if (failed?.error) return jsonError('Could not load the dashboard. Please retry.', 503);
+
     const invoices = invoicesRes.data ?? [];
     const activeSessions = (activeRes.data ?? []).map((r: any) => mapSession({
       ...r,

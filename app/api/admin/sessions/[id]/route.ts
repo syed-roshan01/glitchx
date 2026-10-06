@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, jsonError, friendlyError, audit } from '@/lib/supabase/api';
+import { setDiscountSchema } from '@/lib/validations/schemas';
 import { mapSession, mapSessionItem, mapSettings, mapPricingRule } from '@/lib/mappers';
 import { calculateSessionBreakdown } from '@/lib/billing/engine';
 
@@ -30,11 +31,21 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   const session = await loadSession(admin, params.id);
   if (!session) return jsonError('Session not found', 404);
 
-  const [itemsRes, settingsRes, rulesRes] = await Promise.all([
+  const [itemsRes, settingsRes, rulesRes, invoiceRes] = await Promise.all([
     admin.from('session_items').select('*').eq('session_id', session.id).order('created_at'),
     admin.from('settings').select('*').eq('id', 'default').single(),
     admin.from('pricing_rules').select('*').eq('active', true),
+    admin
+      .from('invoices')
+      .select('id, invoice_number')
+      .eq('session_id', session.id)
+      .order('issued_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
   ]);
+  const invoice = invoiceRes.data
+    ? { id: invoiceRes.data.id as string, invoice_number: invoiceRes.data.invoice_number as string }
+    : null;
 
   const items = (itemsRes.data ?? []).map(mapSessionItem);
   const settings = mapSettings(settingsRes.data ?? {});
@@ -71,7 +82,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     });
   }
 
-  return NextResponse.json({ session, items, settings, rules, breakdown });
+  return NextResponse.json({ session, items, settings, rules, breakdown, invoice });
 }
 
 /** PATCH /api/admin/sessions/[id] — { action: pause | resume | discount | notes } */
@@ -99,11 +110,14 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       if (error) return jsonError(friendlyError(error), 400);
       await audit(admin, userId, 'session.resumed', 'session', params.id);
     } else if (action === 'discount') {
-      const type = body.discountType ?? null;
-      const value = Number(body.discountValue ?? 0);
-      if (type && (value < 0 || (type === 'PERCENT' && value > 100))) {
-        return jsonError('Invalid discount');
-      }
+      const parsed = setDiscountSchema.safeParse({
+        discountType: body.discountType ?? null,
+        discountValue: Number(body.discountValue ?? 0),
+      });
+      if (!parsed.success) return jsonError('Invalid discount');
+      const type = parsed.data.discountType;
+      const value = parsed.data.discountValue;
+      if (type === 'PERCENT' && value > 100) return jsonError('A percentage discount cannot exceed 100%');
       const { error } = await admin.rpc('admin_set_session_discount', {
         p_session_id: params.id,
         p_discount_type: type,
@@ -122,6 +136,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
         .eq('id', params.id)
         .in('status', ['SCHEDULED', 'ACTIVE', 'PAUSED']);
       if (error) return jsonError(friendlyError(error), 400);
+      await audit(admin, userId, 'session.notes_updated', 'session', params.id);
     } else {
       return jsonError('Unknown action');
     }

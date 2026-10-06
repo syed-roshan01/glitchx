@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { cn } from '@/lib/utils/misc';
@@ -21,6 +21,10 @@ export function Modal({
   size?: 'sm' | 'md' | 'lg' | 'xl';
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  // Portals can't be hydrated: render nothing until mounted on the client
+  // so server and first client render match (e.g. `?new=1` deep links).
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   useEffect(() => {
     if (!open) return;
@@ -35,7 +39,7 @@ export function Modal({
     };
   }, [open, onClose]);
 
-  if (!open || typeof document === 'undefined') return null;
+  if (!open || !mounted) return null;
 
   const sizes = {
     sm: 'max-w-sm',

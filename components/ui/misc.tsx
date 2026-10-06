@@ -96,3 +96,34 @@ export function PageHeader({
     </div>
   );
 }
+
+export function ErrorState({
+  message,
+  onRetry,
+  className,
+}: {
+  message?: string;
+  onRetry?: () => void;
+  className?: string;
+}) {
+  return (
+    <div
+      className={cn(
+        'flex flex-col items-center justify-center rounded-2xl border border-dashed border-danger/40 px-6 py-10 text-center',
+        className
+      )}
+      role="alert"
+    >
+      <h3 className="text-sm font-bold text-danger">Couldn’t load this</h3>
+      <p className="mt-1 max-w-sm text-sm text-muted">{message || 'Something went wrong.'}</p>
+      {onRetry && (
+        <button
+          onClick={onRetry}
+          className="mt-4 h-9 rounded-xl border border-border-strong px-4 text-sm font-semibold text-content hover:bg-surface-2"
+        >
+          Retry
+        </button>
+      )}
+    </div>
+  );
+}

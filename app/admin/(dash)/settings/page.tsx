@@ -1,8 +1,10 @@
-﻿'use client';
+'use client';
 
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api-client';
-import { PageHeader, EmptyState } from '@/components/ui/misc';
+import { useApi, invalidate } from '@/lib/use-api';
+import { useAdmin } from '@/components/admin/admin-context';
+import { PageHeader, EmptyState, ErrorState } from '@/components/ui/misc';
 import { Button } from '@/components/ui/button';
 import { Input, Field, Select } from '@/components/ui/input';
 import { useToast } from '@/components/ui/toast';
@@ -12,14 +14,21 @@ import { Store, QrCode, Users, Download, Printer, Save } from 'lucide-react';
 
 export default function SettingsPage() {
   const toast = useToast();
-  const [settings, setSettings] = useState<CafeSettings | null>(null);
+  const { settings: shared, setSettings: setSharedSettings } = useAdmin();
+  // the form starts from the shell's settings (instant), then refreshes from
+  // the API unless the user has already started editing
+  const [settings, setSettingsState] = useState<CafeSettings>(shared);
+  const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
+  const setSettings = (s: CafeSettings) => {
+    setDirty(true);
+    setSettingsState(s);
+  };
 
+  const { data: fresh } = useApi<{ settings: CafeSettings }>('/api/admin/settings');
   useEffect(() => {
-    api.get<{ settings: CafeSettings }>('/api/admin/settings')
-      .then((r) => setSettings(r.settings))
-      .catch((e) => toast.error(e.message));
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    if (fresh?.settings && !dirty) setSettingsState(fresh.settings);
+  }, [fresh]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
@@ -27,21 +36,17 @@ export default function SettingsPage() {
     setBusy(true);
     try {
       const res = await api.put<{ settings: CafeSettings }>('/api/admin/settings', settings);
-      setSettings(res.settings);
+      setSettingsState(res.settings);
+      setDirty(false);
+      // propagate to the shell and every page reading useSettings()
+      setSharedSettings(res.settings);
+      invalidate('/api/admin');
       toast.success('Settings saved');
     } catch (err: any) {
       toast.error(err.message);
     } finally {
       setBusy(false);
     }
-  }
-
-  if (!settings) {
-    return (
-      <div className="flex h-64 items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-border-strong border-t-primary" />
-      </div>
-    );
   }
 
   return (
@@ -71,7 +76,7 @@ export default function SettingsPage() {
               <Input value={settings.address ?? ''} onChange={(e) => setSettings({ ...settings, address: e.target.value })} />
             </Field>
             <Field label="Logo URL (optional)">
-              <Input value={settings.logo_url ?? ''} onChange={(e) => setSettings({ ...settings, logo_url: e.target.value })} placeholder="https://â€¦" />
+              <Input value={settings.logo_url ?? ''} onChange={(e) => setSettings({ ...settings, logo_url: e.target.value })} placeholder="https://…" />
             </Field>
             <Field label="Invoice prefix" hint={`Invoices look like ${settings.invoice_prefix}-2026-00001`}>
               <Input value={settings.invoice_prefix} onChange={(e) => setSettings({ ...settings, invoice_prefix: e.target.value.toUpperCase() })} maxLength={10} />
@@ -195,7 +200,7 @@ function QrSection() {
         <div className="flex-1 space-y-3 text-center sm:text-left">
           <p className="text-sm text-muted">
             Print this QR and place it on the counter. Customers scan it with their phone camera to see
-            live availability and book â€” the QR always points to the same page, so it never needs
+            live availability and book — the QR always points to the same page, so it never needs
             reprinting.
           </p>
           <p className="rounded-xl border border-border bg-surface-2 px-3 py-2 font-mono text-xs text-secondary">{bookingUrl}</p>
@@ -240,19 +245,20 @@ function QrSection() {
 
 function StaffSection() {
   const toast = useToast();
-  const [staff, setStaff] = useState<Profile[] | null>(null);
+  const { data, error, reload: load, mutate } = useApi<{ staff: Profile[] }>('/api/admin/staff');
+  const staff = data?.staff ?? null;
   const [form, setForm] = useState({ name: '', email: '', password: '', role: 'STAFF' });
   const [busy, setBusy] = useState(false);
 
-  const load = () => api.get<{ staff: Profile[] }>('/api/admin/staff').then((r) => setStaff(r.staff)).catch(() => setStaff([]));
-  useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  async function update(id: string, patch: Record<string, unknown>) {
+  async function update(id: string, patch: Partial<Profile>) {
+    const prev = data;
+    mutate((d) => (d ? { ...d, staff: d.staff.map((s) => (s.id === id ? { ...s, ...patch } : s)) } : d));
     try {
       await api.patch(`/api/admin/staff/${id}`, patch);
       toast.success('Updated');
       load();
     } catch (e: any) {
+      mutate(() => prev);
       toast.error(e.message);
     }
   }
@@ -278,8 +284,10 @@ function StaffSection() {
         <Users className="h-4 w-4" /> Staff &amp; roles
       </h2>
 
-      {!staff ? (
-        <p className="text-sm text-muted">Loadingâ€¦</p>
+      {error && !data ? (
+        <ErrorState message={error.message} onRetry={load} className="mb-5 py-6" />
+      ) : !staff ? (
+        <p className="text-sm text-muted">Loading…</p>
       ) : staff.length === 0 ? (
         <EmptyState title="No staff accounts" message="Create accounts for your employees." className="py-6" />
       ) : (
@@ -291,12 +299,12 @@ function StaffSection() {
                   {s.name} {s.active ? '' : <span className="text-xs font-bold text-danger">(disabled)</span>}
                 </p>
                 <p className="truncate text-xs text-muted">
-                  {s.email} Â· joined {formatDateTime(s.created_at)}
+                  {s.email} · joined {formatDateTime(s.created_at)}
                 </p>
               </div>
               <select
                 value={s.role}
-                onChange={(e) => update(s.id, { role: e.target.value })}
+                onChange={(e) => update(s.id, { role: e.target.value as Profile['role'] })}
                 className="input-base w-auto py-1.5 text-xs"
                 aria-label={`Role for ${s.name}`}
               >
@@ -323,9 +331,9 @@ function StaffSection() {
         <Field label="Password" hint="Min 8 characters"><Input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required minLength={8} /></Field>
         <Field label="Role">
           <Select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
-            <option value="STAFF">Staff â€” sessions, bookings, billing</option>
-            <option value="MANAGER">Manager â€” + reports</option>
-            <option value="ADMIN">Admin â€” full access</option>
+            <option value="STAFF">Staff — sessions, bookings, billing</option>
+            <option value="MANAGER">Manager — + reports</option>
+            <option value="ADMIN">Admin — full access</option>
           </Select>
         </Field>
         <div className="sm:col-span-2">

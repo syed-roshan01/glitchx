@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth, jsonError, friendlyError, audit } from '@/lib/supabase/api';
+import { requireAuth, jsonError, friendlyError, audit, dbErrorStatus } from '@/lib/supabase/api';
+import { customerUpdateSchema } from '@/lib/validations/schemas';
 import { mapCustomer, mapSession, mapInvoice } from '@/lib/mappers';
 
 export const dynamic = 'force-dynamic';
@@ -78,11 +79,15 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     return jsonError('Invalid request body');
   }
 
+  const parsed = customerUpdateSchema.safeParse(body);
+  if (!parsed.success) return jsonError(parsed.error.issues[0]?.message ?? 'Invalid customer');
+  const input = parsed.data;
+
   const update: Record<string, unknown> = {};
-  if (typeof body.name === 'string' && body.name.trim().length >= 2) update.name = body.name.trim();
-  if (typeof body.mobile === 'string' && body.mobile.trim()) update.mobile = body.mobile.trim();
-  if ('email' in body) update.email = body.email || null;
-  if ('notes' in body) update.notes = body.notes || null;
+  if (input.name !== undefined) update.name = input.name;
+  if (input.mobile !== undefined) update.mobile = input.mobile;
+  if (input.email !== undefined) update.email = input.email || null;
+  if (input.notes !== undefined) update.notes = input.notes || null;
 
   if (Object.keys(update).length === 0) return jsonError('Nothing to update');
 
@@ -92,7 +97,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     .eq('id', params.id)
     .select()
     .single();
-  if (error) return jsonError(friendlyError(error), 400);
+  if (error) return jsonError(friendlyError(error), dbErrorStatus(error));
 
   await audit(admin, userId, 'customer.updated', 'customer', params.id, update);
   return NextResponse.json({ customer: mapCustomer(data) });
@@ -117,7 +122,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
   }
 
   const { error } = await admin.from('customers').delete().eq('id', params.id);
-  if (error) return jsonError(friendlyError(error), 400);
+  if (error) return jsonError(friendlyError(error), dbErrorStatus(error));
 
   await audit(admin, userId, 'customer.deleted', 'customer', params.id);
   return NextResponse.json({ ok: true });

@@ -1,42 +1,30 @@
-﻿'use client';
+'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '@/lib/api-client';
-import { PageHeader, EmptyState } from '@/components/ui/misc';
+import { useApi } from '@/lib/use-api';
+import { useSettings } from '@/components/admin/admin-context';
+import { PageHeader, EmptyState, ErrorState } from '@/components/ui/misc';
 import { ListSkeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { Input, Field, Select, Textarea } from '@/components/ui/input';
 import { Modal, ConfirmDialog } from '@/components/ui/modal';
 import { useToast } from '@/components/ui/toast';
 import { formatMoney } from '@/lib/billing/format';
-import type { CafeSettings, ServiceItem } from '@/types';
+import type { ServiceItem } from '@/types';
 import { Sparkles, Plus, Pencil, Trash2 } from 'lucide-react';
 
 export default function ServicesPage() {
   const toast = useToast();
-  const [services, setServices] = useState<ServiceItem[] | null>(null);
-  const [settings, setSettings] = useState<CafeSettings | null>(null);
+  const settings = useSettings();
+  const { data, error, reload } = useApi<{ services: ServiceItem[] }>('/api/admin/services');
+  const services = data?.services ?? null;
   const [editService, setEditService] = useState<ServiceItem | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const load = useCallback(async () => {
-    try {
-      const [s, dash] = await Promise.all([
-        api.get<{ services: ServiceItem[] }>('/api/admin/services'),
-        api.get<{ settings: CafeSettings }>('/api/admin/dashboard'),
-      ]);
-      setServices(s.services);
-      setSettings(dash.settings);
-    } catch {
-      setServices([]);
-    }
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  const load = reload;
 
   async function remove() {
     if (!deleteId) return;
@@ -53,13 +41,13 @@ export default function ServicesPage() {
     }
   }
 
-  const sym = settings?.currency_symbol || 'â‚¹';
+  const sym = settings.currency_symbol || '₹';
 
   return (
     <div>
       <PageHeader
         title="Games & Services"
-        subtitle="Extra controllers, tournaments, premium games â€” anything billable per session"
+        subtitle="Extra controllers, tournaments, premium games — anything billable per session"
         actions={
           <Button onClick={() => setAddOpen(true)}>
             <Plus className="h-4 w-4" /> Add Service
@@ -67,7 +55,9 @@ export default function ServicesPage() {
         }
       />
 
-      {!services ? (
+      {error && !data ? (
+        <ErrorState message={error.message} onRetry={reload} />
+      ) : !services ? (
         <ListSkeleton rows={5} />
       ) : services.length === 0 ? (
         <EmptyState
@@ -181,7 +171,7 @@ function ServiceModal({
           <Textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="Optional" />
         </Field>
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Price (â‚¹)" required>
+          <Field label="Price (₹)" required>
             <Input type="number" min={0} step="0.01" value={form.price} onChange={(e) => setForm({ ...form, price: Number(e.target.value) })} required />
           </Field>
           <Field label="Billing type">

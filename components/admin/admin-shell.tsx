@@ -9,6 +9,7 @@ import { cn } from '@/lib/utils/misc';
 import { formatClock } from '@/lib/billing/format';
 import { Logo } from '@/components/ui/logo';
 import type { CafeSettings, Profile } from '@/types';
+import { AdminProvider, useAdmin } from './admin-context';
 import {
   LayoutDashboard, Gamepad2, CalendarCheck, Users, Monitor, CupSoda,
   Sparkles, Tag, Receipt, CreditCard, BarChart3, Settings, LogOut,
@@ -26,7 +27,7 @@ const NAV = [
   { href: '/admin/pricing', label: 'Pricing', icon: Tag, admin: false },
   { href: '/admin/invoices', label: 'Invoices', icon: Receipt, admin: false },
   { href: '/admin/payments', label: 'Payments', icon: CreditCard, admin: false },
-  { href: '/admin/reports', label: 'Reports', icon: BarChart3, admin: false },
+  { href: '/admin/reports', label: 'Reports', icon: BarChart3, admin: false, manager: true },
   { href: '/admin/settings', label: 'Settings', icon: Settings, admin: true },
 ];
 
@@ -46,13 +47,23 @@ export function AdminShell({
   settings: CafeSettings;
   children: ReactNode;
 }) {
+  return (
+    <AdminProvider settings={settings} profile={profile}>
+      <ShellFrame>{children}</ShellFrame>
+    </AdminProvider>
+  );
+}
+
+function ShellFrame({ children }: { children: ReactNode }) {
+  const { settings, profile } = useAdmin();
   const pathname = usePathname();
   const router = useRouter();
   const now = useNow(1000);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const isAdmin = profile.role === 'ADMIN';
 
-  const nav = NAV.filter((n) => !n.admin || isAdmin);
+  const isManager = isAdmin || profile.role === 'MANAGER';
+  const nav = NAV.filter((n) => (!n.admin || isAdmin) && (!('manager' in n) || isManager));
   const isActive = (href: string) =>
     href === '/admin' ? pathname === '/admin' : pathname.startsWith(href);
 

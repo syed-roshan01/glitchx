@@ -1,16 +1,18 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api-client';
+import { useApi, invalidate } from '@/lib/use-api';
+import { useSettings } from '@/components/admin/admin-context';
 import { PageHeader } from '@/components/ui/misc';
 import { Button } from '@/components/ui/button';
 import { Input, Field } from '@/components/ui/input';
 import { useToast } from '@/components/ui/toast';
-import { useRealtime } from '@/hooks/use-realtime';
+import { useRealtime, useDebouncedCallback } from '@/hooks/use-realtime';
 import { formatMoney, toLocalInputValue } from '@/lib/billing/format';
 import { estimateBookingAmount } from '@/lib/billing/engine';
-import type { CafeSettings, Customer, PricingPlan, Resource } from '@/types';
+import type { Customer, PricingPlan, Resource } from '@/types';
 import { Search, UserPlus, Check, Zap, Clock, CalendarClock, Rocket, Users } from 'lucide-react';
 
 type StartMode = 'now' | '+5' | '+10' | 'custom';
@@ -33,7 +35,9 @@ export default function NewSessionPage() {
   const [showResults, setShowResults] = useState(false);
 
   // step 2: resource
-  const [resources, setResources] = useState<Resource[]>([]);
+  const settings = useSettings();
+  const { data: resData, reload: reloadResources } = useApi<{ resources: Resource[] }>('/api/admin/resources');
+  const resources = useMemo(() => resData?.resources ?? [], [resData]);
   const [resourceId, setResourceId] = useState<string | null>(null);
 
   // step 3: start time
@@ -41,55 +45,41 @@ export default function NewSessionPage() {
   const [customTime, setCustomTime] = useState('');
 
   // step 4: plan
-  const [plans, setPlans] = useState<PricingPlan[]>([]);
+  const { data: planData } = useApi<{ plans: PricingPlan[] }>('/api/admin/pricing/plans');
+  const plans = useMemo(() => planData?.plans ?? [], [planData]);
   const [planId, setPlanId] = useState<string | null>(null);
   const [expectedMinutes, setExpectedMinutes] = useState<number | null>(null);
 
-  const [settings, setSettings] = useState<CafeSettings | null>(null);
   const [starting, setStarting] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const loadCatalog = useCallback(async () => {
-    try {
-      const [res, planRes, dash] = await Promise.all([
-        api.get<{ resources: Resource[] }>('/api/admin/resources'),
-        api.get<{ plans: PricingPlan[] }>('/api/admin/pricing/plans'),
-        api.get<{ settings: CafeSettings }>('/api/admin/dashboard'),
-      ]);
-      setResources(res.resources);
-      setPlans(planRes.plans);
-      setSettings(dash.settings);
-    } catch (e: any) {
-      toast.error(e.message);
-    }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    loadCatalog();
-  }, [loadCatalog]);
-
-  const refetchResources = useCallback(() => {
-    api.get<{ resources: Resource[] }>('/api/admin/resources').then((r) => setResources(r.resources)).catch(() => {});
-  }, []);
+  const refetchResources = useDebouncedCallback(reloadResources, 400);
   useRealtime('resources', refetchResources);
   useRealtime('sessions', refetchResources);
 
   // waitlist / prefill via query params
   useEffect(() => {
     const cid = params.get('customerId');
+    let cancelled = false;
     if (cid) {
-      setSelectedCustomer({
-        id: cid,
-        name: params.get('name') ?? 'Customer',
-        mobile: params.get('mobile') ?? '',
-        email: null, notes: null, created_by: null, created_at: '', updated_at: '',
-      });
+      // only the id travels in the URL; fetch the customer's details
+      api
+        .get<{ customer: Customer }>(`/api/admin/customers/${encodeURIComponent(cid)}`)
+        .then((r) => {
+          if (!cancelled) setSelectedCustomer(r.customer);
+        })
+        .catch((e: any) => {
+          if (!cancelled) toast.error(`Could not load customer: ${e.message}`);
+        });
     }
     const rid = params.get('resourceId');
     if (rid) setResourceId(rid);
     const dur = params.get('durationMinutes');
     if (dur) setExpectedMinutes(Number(dur));
-  }, [params]);
+    return () => {
+      cancelled = true;
+    };
+  }, [params]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // debounced customer search
   useEffect(() => {
@@ -106,11 +96,14 @@ export default function NewSessionPage() {
         );
         setResults(res.customers);
         setShowResults(true);
+      } catch (e: any) {
+        setResults([]);
+        toast.error(`Customer search failed: ${e.message}`);
       } finally {
         setSearching(false);
       }
     }, 250);
-  }, [query, selectedCustomer]);
+  }, [query, selectedCustomer]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const resource = resources.find((r) => r.id === resourceId);
   const resourcePlans = useMemo(
@@ -119,24 +112,29 @@ export default function NewSessionPage() {
   );
   const plan = resourcePlans.find((p) => p.id === planId) ?? null;
 
-  const startTime = useMemo(() => {
-    const now = new Date();
-    if (startMode === 'now') return now;
-    if (startMode === '+5') return new Date(now.getTime() + 5 * 60000);
-    if (startMode === '+10') return new Date(now.getTime() + 10 * 60000);
-    if (customTime) return new Date(customTime);
-    return now;
-  }, [startMode, customTime]);
-
-  const isScheduled = startTime.getTime() > Date.now() + 60_000;
-  const estimate = plan ? estimateBookingAmount(plan, expectedMinutes ?? 60) : null;
-  const sym = settings?.currency_symbol || '₹';
+  // Relative starts ("in 5 min") are stored as an offset and resolved to an
+  // absolute time only at submit, so a slow form doesn't schedule in the past.
+  const offsetMinutes = startMode === '+5' ? 5 : startMode === '+10' ? 10 : 0;
+  const customDate = startMode === 'custom' && customTime ? new Date(customTime) : null;
+  const isScheduled =
+    offsetMinutes > 0 || (!!customDate && !Number.isNaN(customDate.getTime()) && customDate.getTime() > Date.now() + 60_000);
+  // what the duration input shows IS the value that gets submitted
+  const effectiveMinutes = expectedMinutes ?? plan?.duration_minutes ?? 60;
+  const estimate = plan ? estimateBookingAmount(plan, effectiveMinutes) : null;
+  const sym = settings.currency_symbol || '₹';
 
   const canStart =
     (selectedCustomer || (newMode && newName.trim().length >= 2 && newMobile.trim().length >= 7)) &&
     resourceId &&
     planId &&
-    (!isScheduled || expectedMinutes !== null || plan?.duration_minutes !== null);
+    (!isScheduled || effectiveMinutes > 0);
+
+  function resolveStartTime(): Date {
+    const now = new Date();
+    if (offsetMinutes > 0) return new Date(now.getTime() + offsetMinutes * 60000);
+    if (customDate && !Number.isNaN(customDate.getTime())) return customDate;
+    return now;
+  }
 
   async function start() {
     if (!resourceId || !planId) return;
@@ -145,14 +143,17 @@ export default function NewSessionPage() {
       const body: Record<string, unknown> = {
         resourceId,
         pricingPlanId: planId,
-        startTime: isScheduled ? startTime.toISOString() : new Date().toISOString(),
-        expectedMinutes: isScheduled ? expectedMinutes ?? plan?.duration_minutes ?? 60 : expectedMinutes,
+        startTime: resolveStartTime().toISOString(),
+        expectedMinutes: isScheduled ? effectiveMinutes : expectedMinutes,
       };
       if (selectedCustomer) body.customerId = selectedCustomer.id;
       else body.newCustomer = { name: newName.trim(), mobile: newMobile.trim() };
 
       const res = await api.post<{ id: string }>('/api/admin/sessions', body);
       toast.success(isScheduled ? 'Session scheduled' : 'Session started');
+      invalidate('/api/admin/sessions');
+      invalidate('/api/admin/dashboard');
+      invalidate('/api/admin/resources');
       router.push(`/admin/sessions/${res.id}`);
     } catch (e: any) {
       toast.error(e.message);
@@ -332,8 +333,8 @@ export default function NewSessionPage() {
                   min={15}
                   max={480}
                   step={15}
-                  value={expectedMinutes ?? plan?.duration_minutes ?? 60}
-                  onChange={(e) => setExpectedMinutes(Number(e.target.value))}
+                  value={effectiveMinutes || ''}
+                  onChange={(e) => setExpectedMinutes(e.target.value === '' ? 0 : Number(e.target.value))}
                   className="input-base w-24"
                 />
             </div>

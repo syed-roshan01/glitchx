@@ -1,6 +1,8 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useToast } from '@/components/ui/toast';
+import { api } from '@/lib/api-client';
 import Link from 'next/link';
 import { StatusBadge } from '@/components/ui/badge';
 import { useNow } from '@/hooks/use-now';
@@ -33,9 +35,15 @@ export function SessionCard({
   const [addItemOpen, setAddItemOpen] = useState(false);
   const [addServiceOpen, setAddServiceOpen] = useState(false);
   const [endOpen, setEndOpen] = useState(false);
+  const toast = useToast();
+  const [pauseBusy, setPauseBusy] = useState(false);
+  // Items returned by an add-item/service call are shown immediately, but
+  // only until the parent delivers a fresh `items` prop.
   const [localItems, setLocalItems] = useState<SessionItem[] | null>(null);
+  useEffect(() => setLocalItems(null), [items]);
 
-  const activeItems = localItems ?? items.filter((i) => i.session_id === session.id);
+  const propItems = useMemo(() => items.filter((i) => i.session_id === session.id), [items, session.id]);
+  const activeItems = localItems ?? propItems;
 
   const breakdown = useMemo(() => {
     if (!session.actual_start_time) return null;
@@ -71,12 +79,15 @@ export function SessionCard({
   const paused = session.status === 'PAUSED';
 
   async function togglePause() {
+    if (pauseBusy) return;
+    setPauseBusy(true);
     try {
-      const { api } = await import('@/lib/api-client');
       await api.patch(`/api/admin/sessions/${session.id}`, { action: paused ? 'resume' : 'pause' });
       onChanged();
-    } catch {
-      /* toast handled by parent via onChanged refresh */
+    } catch (e: any) {
+      toast.error(e?.message || `Could not ${paused ? 'resume' : 'pause'} the session`);
+    } finally {
+      setPauseBusy(false);
     }
   }
 
@@ -162,6 +173,7 @@ export function SessionCard({
         {settings.pause_enabled ? (
           <button
             onClick={togglePause}
+            disabled={pauseBusy}
             className={`flex items-center justify-center gap-1.5 rounded-xl border px-2 py-2 text-xs font-bold transition-colors ${
               paused
                 ? 'border-success/40 bg-success/10 text-success'

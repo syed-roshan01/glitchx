@@ -1,8 +1,10 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback } from 'react';
 import Link from 'next/link';
-import { api } from '@/lib/api-client';
+import { useApi, invalidate } from '@/lib/use-api';
+import { useSettings } from '@/components/admin/admin-context';
+import { getZonedDayStart } from '@/lib/utils/time';
 import { useRealtime, useDebouncedCallback } from '@/hooks/use-realtime';
 import { StatCard, EmptyState, PageHeader } from '@/components/ui/misc';
 import { StatsSkeleton, CardGridSkeleton } from '@/components/ui/skeleton';
@@ -30,24 +32,10 @@ interface DashboardData {
 }
 
 export default function DashboardPage() {
-  const [data, setData] = useState<DashboardData | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const settings = useSettings();
+  const { data, error, reload } = useApi<DashboardData>('/api/admin/dashboard');
 
-  const load = useCallback(async () => {
-    try {
-      const d = await api.get<DashboardData>('/api/admin/dashboard');
-      setData(d);
-      setError(null);
-    } catch (e: any) {
-      setError(e.message);
-    }
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  const refetch = useDebouncedCallback(load, 500);
+  const refetch = useDebouncedCallback(reload, 500);
 
   // realtime: any change to live tables refreshes the dashboard
   useRealtime('sessions', refetch);
@@ -56,12 +44,22 @@ export default function DashboardPage() {
   useRealtime('waitlist', refetch);
   useRealtime('resources', refetch);
 
-  if (error) {
+  const onSessionChanged = useCallback(() => {
+    reload();
+    invalidate('/api/admin/sessions');
+  }, [reload]);
+
+  if (error && !data) {
     return (
       <EmptyState
         title="Could not load the dashboard"
-        message={error}
+        message={error.message}
         className="mt-10"
+        action={
+          <button onClick={() => reload()} className="text-sm font-bold text-primary hover:underline">
+            Retry
+          </button>
+        }
       />
     );
   }
@@ -75,8 +73,18 @@ export default function DashboardPage() {
     );
   }
 
-  const { settings, stats, resources, sessions, sessionItems, waitlist, bookings, rules } = data;
+  const { stats, resources, sessions, sessionItems, waitlist, bookings, rules } = data;
   const sym = settings.currency_symbol || '₹';
+
+  // Utilization = busy minutes today / (active resources × minutes elapsed
+  // since local midnight in the cafe timezone), capped at 100%.
+  const activeResourceCount = Math.max(resources.filter((r) => r.active).length, 1);
+  const busyMinutes = stats.utilization.reduce((s, u) => s + u.minutes, 0);
+  const elapsedMinutes = Math.max(
+    (Date.now() - getZonedDayStart(settings.timezone || 'Asia/Kolkata').getTime()) / 60000,
+    1
+  );
+  const utilizationPct = Math.min(100, Math.round((busyMinutes / (activeResourceCount * elapsedMinutes)) * 100));
 
   return (
     <div className="space-y-6">
@@ -149,7 +157,7 @@ export default function DashboardPage() {
                 items={sessionItems}
                 settings={settings}
                 rules={rules}
-                onChanged={refetch}
+                onChanged={onSessionChanged}
               />
             ))}
           </div>
@@ -235,16 +243,8 @@ export default function DashboardPage() {
           <StatCard label="Avg bill" value={formatMoney(stats.avgBillValue, sym)} />
           <StatCard
             label="Resource utilization"
-            value={`${Math.min(
-              100,
-              Math.round(
-                (stats.utilization.reduce((s, u) => s + u.minutes, 0) /
-                  Math.max(resources.filter((r) => r.active).length, 1) /
-                  60) *
-                  100
-              )
-            )}%`}
-            sub="of active hours today"
+            value={`${utilizationPct}%`}
+            sub="of time since midnight, all stations"
           />
           <Link href="/admin/reports" className="glass flex items-center justify-between rounded-2xl p-4 shadow-card transition-colors hover:border-secondary/40">
             <span className="text-[11px] font-bold uppercase tracking-wider text-muted">Reports</span>

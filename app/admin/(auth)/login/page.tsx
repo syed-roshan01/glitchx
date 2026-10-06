@@ -15,18 +15,37 @@ export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
+    setNotice(null);
     try {
       const supabase = createBrowserSupabaseClient();
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      const { data: auth, error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) {
         toast.error(error.message === 'Invalid login credentials'
           ? 'Wrong email or password.'
           : 'Could not sign in. Please try again.');
         return;
+      }
+      // inactive accounts would be rejected by the middleware/API — explain why
+      if (auth.user) {
+        const { data: profile, error: pErr } = await supabase
+          .from('profiles')
+          .select('active')
+          .eq('id', auth.user.id)
+          .single();
+        // PGRST116 = no profile row; any other error falls through to the
+        // server-side guard rather than blocking a valid user
+        if (profile?.active === false || pErr?.code === 'PGRST116') {
+          await supabase.auth.signOut();
+          const msg = 'Your account is not active yet — ask an admin to activate it.';
+          setNotice(msg);
+          toast.error(msg);
+          return;
+        }
       }
       // check for first-time setup
       const { data: status } = await supabase.rpc('public_setup_status');
@@ -72,6 +91,11 @@ export default function LoginPage() {
               required
             />
           </Field>
+          {notice && (
+            <p className="rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-sm font-semibold text-warning" role="alert">
+              {notice}
+            </p>
+          )}
           <Button type="submit" loading={loading} className="w-full" size="lg">
             Sign In
           </Button>

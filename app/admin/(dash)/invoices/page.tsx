@@ -1,55 +1,43 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { api } from '@/lib/api-client';
+import { useApi, invalidate } from '@/lib/use-api';
+import { useSettings } from '@/components/admin/admin-context';
 import { useRealtime, useDebouncedCallback } from '@/hooks/use-realtime';
-import { PageHeader, EmptyState } from '@/components/ui/misc';
+import { PageHeader, EmptyState, ErrorState } from '@/components/ui/misc';
 import { ListSkeleton } from '@/components/ui/skeleton';
 import { StatusBadge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { formatMoney, formatDateTime } from '@/lib/billing/format';
-import type { CafeSettings, Invoice } from '@/types';
+import type { Invoice } from '@/types';
 import { Receipt, Search, ChevronLeft, ChevronRight, IndianRupee } from 'lucide-react';
 
 export default function InvoicesPage() {
-  const [invoices, setInvoices] = useState<Invoice[] | null>(null);
-  const [settings, setSettings] = useState<CafeSettings | null>(null);
-  const [query, setQuery] = useState('');
+  const searchParams = useSearchParams();
+  const settings = useSettings();
+  const [query, setQuery] = useState(() => searchParams.get('q') ?? '');
+  const [debouncedQuery, setDebouncedQuery] = useState(query);
   const [status, setStatus] = useState('');
   const [page, setPage] = useState(0);
-  const [total, setTotal] = useState(0);
-  const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const load = useCallback(async () => {
-    try {
-      const params = new URLSearchParams({ limit: '20', offset: String(page * 20) });
-      if (query.trim()) params.set('q', query.trim());
-      if (status) params.set('status', status);
-      const [res, dash] = await Promise.all([
-        api.get<{ invoices: Invoice[]; total: number }>(`/api/admin/invoices?${params}`),
-        api.get<{ settings: CafeSettings }>('/api/admin/dashboard'),
-      ]);
-      setInvoices(res.invoices);
-      setTotal(res.total);
-      setSettings(dash.settings);
-    } catch {
-      setInvoices([]);
-    }
-  }, [query, status, page]);
 
   useEffect(() => {
-    if (debounce.current) clearTimeout(debounce.current);
-    debounce.current = setTimeout(load, 250);
-    return () => {
-      if (debounce.current) clearTimeout(debounce.current);
-    };
-  }, [load]);
+    const t = setTimeout(() => setDebouncedQuery(query), 250);
+    return () => clearTimeout(t);
+  }, [query]);
 
-  const refetch = useDebouncedCallback(load, 400);
+  const params = new URLSearchParams({ limit: '20', offset: String(page * 20) });
+  if (debouncedQuery.trim()) params.set('q', debouncedQuery.trim());
+  if (status) params.set('status', status);
+  const { data, error, reload } = useApi<{ invoices: Invoice[]; total: number }>(`/api/admin/invoices?${params}`);
+  const invoices = data?.invoices ?? null;
+  const total = data?.total ?? 0;
+
+  const refetch = useDebouncedCallback(() => invalidate('/api/admin/invoices'), 400);
   useRealtime('invoices', refetch);
 
-  const sym = settings?.currency_symbol || '₹';
+  const sym = settings.currency_symbol || '₹';
 
   return (
     <div>
@@ -82,7 +70,9 @@ export default function InvoicesPage() {
         </div>
       </div>
 
-      {!invoices || !settings ? (
+      {error && !data ? (
+        <ErrorState message={error.message} onRetry={reload} />
+      ) : !invoices ? (
         <ListSkeleton rows={6} />
       ) : invoices.length === 0 ? (
         <EmptyState

@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth, jsonError, friendlyError, audit } from '@/lib/supabase/api';
+import { requireAuth, jsonError, friendlyError, audit, pageParams } from '@/lib/supabase/api';
+import { getCachedSettings } from '@/lib/supabase/settings-cache';
+import { getZonedDayStart } from '@/lib/utils/time';
 import { mapPayment } from '@/lib/mappers';
 import { paymentSchema } from '@/lib/validations/schemas';
 
@@ -11,16 +13,22 @@ export async function GET(req: NextRequest) {
   if (!ctx) return response!;
   const { admin } = ctx;
 
-  const params = req.nextUrl.searchParams;
-  const limit = Math.min(Number(params.get('limit') ?? 50), 200);
-  const offset = Number(params.get('offset') ?? 0);
+  const { limit, offset } = pageParams(req, 50, 200);
+  const settings = await getCachedSettings(admin);
+  const dayStart = getZonedDayStart(settings.timezone).toISOString();
 
-  const { data, error, count } = await admin
-    .from('payments')
-    .select('*, invoices(invoice_number), profiles(name)', { count: 'exact' })
-    .order('created_at', { ascending: false })
-    .range(offset, offset + limit - 1);
+  const [list, today] = await Promise.all([
+    admin
+      .from('payments')
+      .select('*, invoices(invoice_number), profiles(name)', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1),
+    admin.from('payments').select('amount').eq('payment_status', 'PAID').gte('paid_at', dayStart),
+  ]);
+  const { data, error, count } = list;
   if (error) return jsonError(friendlyError(error), 400);
+  const todayTotal =
+    Math.round((today.data ?? []).reduce((s: number, p: any) => s + Number(p.amount), 0) * 100) / 100;
 
   const payments = (data ?? []).map((r: any) =>
     mapPayment({
@@ -29,7 +37,7 @@ export async function GET(req: NextRequest) {
       invoice_number: r.invoices?.invoice_number ?? null,
     })
   );
-  return NextResponse.json({ payments, total: count ?? 0 });
+  return NextResponse.json({ payments, total: count ?? 0, todayTotal });
 }
 
 /** POST /api/admin/payments — record a payment against an invoice */
@@ -49,54 +57,22 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) return jsonError(parsed.error.issues[0]?.message ?? 'Invalid payment');
   const input = parsed.data;
 
-  const { data: invoice, error: ierr } = await admin
-    .from('invoices')
-    .select('id, total_amount, status, session_id')
-    .eq('id', input.invoiceId)
-    .single();
-  if (ierr || !invoice) return jsonError('Invoice not found', 404);
-  if (invoice.status === 'PAID') return jsonError('This invoice is already paid', 409);
-  if (invoice.status === 'VOID') return jsonError('This invoice is void', 409);
-
-  const total = Number(invoice.total_amount);
-
-  // existing payments
-  const { data: existing } = await admin
-    .from('payments')
-    .select('amount, payment_status')
-    .eq('invoice_id', input.invoiceId);
-  const alreadyPaid = (existing ?? [])
-    .filter((p: any) => p.payment_status === 'PAID')
-    .reduce((s: number, p: any) => s + Number(p.amount), 0);
-  const remaining = Math.max(total - alreadyPaid, 0);
-
-  if (input.amount > remaining + 0.01) {
-    return jsonError(`Payment exceeds the remaining balance (${remaining.toFixed(2)})`, 400);
+  // atomic: locks the invoice, checks the balance, inserts the payment and
+  // updates invoice + session status in one transaction
+  const { data: result, error } = await admin.rpc('admin_record_payment', {
+    p_invoice_id: input.invoiceId,
+    p_amount: input.amount,
+    p_method: input.paymentMethod,
+    p_reference: input.transactionReference ?? null,
+    p_acting_user: userId,
+  });
+  if (error) {
+    const raw = error.message ?? '';
+    const status = /INVOICE_NOT_FOUND/.test(raw) ? 404 : /EXCEEDS|VOID/.test(raw) ? 409 : 400;
+    return jsonError(friendlyError(error), status);
   }
-
-  const { data: payment, error } = await admin
-    .from('payments')
-    .insert({
-      invoice_id: input.invoiceId,
-      amount: input.amount,
-      payment_method: input.paymentMethod,
-      payment_status: 'PAID',
-      transaction_reference: input.transactionReference ?? null,
-      paid_at: new Date().toISOString(),
-      received_by: userId,
-    })
-    .select()
-    .single();
-  if (error) return jsonError(friendlyError(error), 400);
-
-  const newStatus = alreadyPaid + input.amount >= total - 0.01 ? 'PAID' : 'PARTIAL';
-  await admin.from('invoices').update({ status: newStatus }).eq('id', input.invoiceId);
-  if (invoice.session_id) {
-    await admin
-      .from('sessions')
-      .update({ payment_status: newStatus === 'PAID' ? 'PAID' : 'PARTIAL' })
-      .eq('id', invoice.session_id);
-  }
+  const newStatus = result?.invoice_status as string;
+  const { data: payment } = await admin.from('payments').select('*').eq('id', result?.payment_id).single();
 
   await audit(admin, userId, 'payment.recorded', 'invoice', input.invoiceId, {
     amount: input.amount,

@@ -25,7 +25,12 @@ export const IDENTITY_HEADER = 'x-dsh-identity';
 const TOKEN_TTL_SECONDS = 120;
 
 function secretString(): string {
-  return process.env.SUPABASE_SERVICE_ROLE_KEY ?? 'insecure-dev-secret';
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!key) {
+    // fail closed: verification returns null and requireAuth uses the full path
+    throw new Error('SUPABASE_SERVICE_ROLE_KEY is not set');
+  }
+  return key;
 }
 
 function b64urlEncode(str: string): string {

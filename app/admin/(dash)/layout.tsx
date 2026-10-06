@@ -3,7 +3,8 @@ import { headers } from 'next/headers';
 import { createServerSupabaseClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { verifyIdentity, IDENTITY_HEADER } from '@/lib/auth/signed-identity';
-import { mapSettings, mapProfile } from '@/lib/mappers';
+import { mapProfile } from '@/lib/mappers';
+import { getCachedSettings } from '@/lib/supabase/settings-cache';
 import { AdminShell } from '@/components/admin/admin-shell';
 import type { Profile } from '@/types';
 
@@ -38,11 +39,11 @@ export default async function DashboardLayout({ children }: { children: React.Re
     profile = mapProfile(row);
   }
 
-  const admin = createAdminClient();
-  const { data: settings } = await admin.from('settings').select('*').eq('id', 'default').single();
+  // 30s per-instance cache — no DB round-trip on most navigations
+  const settings = await getCachedSettings(createAdminClient());
 
   return (
-    <AdminShell profile={profile} settings={mapSettings(settings ?? {})}>
+    <AdminShell profile={profile} settings={settings}>
       {children}
     </AdminShell>
   );

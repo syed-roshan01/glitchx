@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Modal } from '@/components/ui/modal';
 import { Button } from '@/components/ui/button';
 import { Input, Field } from '@/components/ui/input';
@@ -39,6 +39,14 @@ export function EndSessionModal({
   const [paymentMethod, setPaymentMethod] = useState<'CASH' | 'UPI' | 'CARD' | 'OTHER' | null>('CASH');
   const [busy, setBusy] = useState(false);
 
+  // Re-sync with the session's saved discount every time the modal opens
+  // (or the saved discount changes) so the shown total matches the invoice.
+  useEffect(() => {
+    if (!open) return;
+    setDiscountType(session.discount_type ?? null);
+    setDiscountValue(session.discount_value ?? 0);
+  }, [open, session.discount_type, session.discount_value]);
+
   const breakdown = useMemo(() => {
     if (!now || !session.actual_start_time) return null;
     const itemAmount = items
@@ -76,8 +84,11 @@ export function EndSessionModal({
       const res = await api.post<{ invoiceId: string; invoiceNumber: string }>(
         `/api/admin/sessions/${session.id}/end`,
         {
-          discountType: discountType && discountValue > 0 ? discountType : null,
-          discountValue: discountType ? Number(discountValue) || 0 : 0,
+          // A null type means "keep the saved discount" server-side, so an
+          // explicit "no discount" is sent as FIXED 0 to clear it.
+          ...(discountType && Number(discountValue) > 0
+            ? { discountType, discountValue: Number(discountValue) }
+            : { discountType: 'FIXED' as const, discountValue: 0 }),
           paymentMethod,
         }
       );

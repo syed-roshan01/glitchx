@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { api } from '@/lib/api-client';
+import { useApi, invalidate } from '@/lib/use-api';
 import { EmptyState, StatCard } from '@/components/ui/misc';
 import { StatusBadge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -25,23 +26,30 @@ interface InvoiceDetail {
 export default function InvoiceDetailPage() {
   const { id } = useParams<{ id: string }>();
   const toast = useToast();
-  const [data, setData] = useState<InvoiceDetail | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { data, error, reload } = useApi<InvoiceDetail>(id ? `/api/admin/invoices/${id}` : null);
   const [layout, setLayout] = useState<'a4' | 'thermal'>('a4');
   const [payOpen, setPayOpen] = useState(false);
 
-  const load = () =>
-    api
-      .get<InvoiceDetail>(`/api/admin/invoices/${id}`)
-      .then(setData)
-      .catch((e) => setError(e.message));
+  const load = () => {
+    reload();
+    invalidate('/api/admin/invoices?');
+    invalidate('/api/admin/payments');
+    invalidate('/api/admin/dashboard');
+  };
 
-  useEffect(() => {
-    load();
-  }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  if (error) {
-    return <EmptyState title="Invoice not found" message={error} className="mt-10" />;
+  if (error && !data) {
+    return (
+      <EmptyState
+        title="Couldn’t load invoice"
+        message={error.message}
+        className="mt-10"
+        action={
+          <button onClick={() => reload()} className="text-sm font-bold text-primary hover:underline">
+            Retry
+          </button>
+        }
+      />
+    );
   }
   if (!data) {
     return (

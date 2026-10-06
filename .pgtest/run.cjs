@@ -147,9 +147,9 @@ async function main() {
        values (gen_random_uuid(), 'owner@cafe.test', '{"name": "Test Owner"}')
        returning id`
     );
-    const { rows: [profile] } = await client.query('select name, role from public.profiles where id = $1', [user.id]);
-    profile && profile.role === 'STAFF' && profile.name === 'Test Owner'
-      ? pass('auth user trigger creates STAFF profile')
+    const { rows: [profile] } = await client.query('select name, role, active from public.profiles where id = $1', [user.id]);
+    profile && profile.role === 'STAFF' && profile.name === 'Test Owner' && profile.active === false
+      ? pass('auth user trigger creates INACTIVE STAFF profile (self-signup gets no access)')
       : fail('profile trigger', new Error(JSON.stringify(profile)));
 
     // 2. claim_first_admin
@@ -158,6 +158,20 @@ async function main() {
     claimed.ok === true ? pass('claim_first_admin promotes to ADMIN') : fail('claim_first_admin');
     const { rows: [role2] } = await client.query('select public.claim_first_admin() as ok');
     role2.ok === false ? pass('claim_first_admin refuses when admin exists') : fail('claim re-claim guard');
+    const { rows: [adminProfile] } = await client.query('select role, active from public.profiles where id = $1', [user.id]);
+    adminProfile.role === 'ADMIN' && adminProfile.active === true
+      ? pass('claimed admin is activated')
+      : fail('claimed admin active', new Error(JSON.stringify(adminProfile)));
+    // a later self-signup stays inactive and has no staff rights
+    const { rows: [intruder] } = await client.query(
+      `insert into auth.users (id, email) values (gen_random_uuid(), 'intruder@evil.test') returning id`
+    );
+    await client.query("select set_config('request.jwt.claim.sub', $1, false)", [intruder.id]);
+    const { rows: [intr] } = await client.query('select public.is_staff() as staff, public.claim_first_admin() as claimed');
+    intr.staff === false && intr.claimed === false
+      ? pass('self-signup after setup: not staff, cannot claim admin')
+      : fail('self-signup hardening', new Error(JSON.stringify(intr)));
+    await client.query("select set_config('request.jwt.claim.sub', $1, false)", [user.id]);
 
     // 3. setup status
     const { rows: [{ public_setup_status: setupStatus }] } = await client.query('select public.public_setup_status()');
@@ -292,6 +306,26 @@ async function main() {
     anonSettings.length === 1 ? pass('RLS: anon can read settings') : fail('RLS settings');
     const { rows: anonRes } = await client.query('select count(*)::int as n from public.resources where active');
     anonRes[0].n === 3 ? pass('RLS: anon reads active resources') : fail('RLS resources');
+    for (const fn of [
+      "public.admin_pause_session('00000000-0000-0000-0000-000000000000')",
+      "public.admin_end_session_and_invoice('00000000-0000-0000-0000-000000000000', '{}'::jsonb)",
+      "public.admin_record_payment('00000000-0000-0000-0000-000000000000', 1, 'CASH')",
+      "public.admin_update_booking_status('00000000-0000-0000-0000-000000000000', 'CANCELLED')",
+    ]) {
+      const name = fn.split('(')[0];
+      try {
+        await client.query(`select ${fn}`);
+        fail(`anon must not execute ${name}`);
+      } catch (e) {
+        /permission denied/.test(e.message) ? pass(`anon blocked from ${name}`) : fail(`anon exec ${name}`, e);
+      }
+    }
+    const { rows: busy } = await client.query(
+      "select * from public.public_get_busy_slots(now() - interval '1 day', now() + interval '7 days')"
+    );
+    busy.every((b) => !('customer_name' in b) && !('customer_mobile' in b))
+      ? pass(`anon busy slots -> ${busy.length} interval(s), no customer data`)
+      : fail('busy slots leak');
     await client.query('reset role');
 
     // 16. scheduled session activation
@@ -310,6 +344,61 @@ async function main() {
     const { rows: [activated] } = await client.query('select status from public.sessions where id = $1', [schedRes.admin_start_session]);
     activated.status === 'ACTIVE' ? pass('activate_due_sessions promotes due session') : fail('lazy activation');
     await client.query('select public.admin_end_session_and_invoice($1, $2, null, 0, null, null, $3)', [schedRes.admin_start_session, JSON.stringify({ duration_seconds: 0, gaming_amount: 0 }), user.id]);
+
+    // 17. atomic payments (partial -> overpay rejected -> paid)
+    const { rows: [payStart] } = await client.query(
+      'select * from public.admin_start_session($1, $2, $3, now(), null, null, null, $4)',
+      [cust.id, ps5.id, plan.id, user.id]
+    );
+    const { rows: [{ admin_end_session_and_invoice: unpaid }] } = await client.query(
+      'select * from public.admin_end_session_and_invoice($1, $2, null, 0, null, null, $3)',
+      [payStart.admin_start_session, JSON.stringify({ duration_seconds: 0, gaming_amount: 100 }), user.id]
+    );
+    const { rows: [{ admin_record_payment: p1 }] } = await client.query(
+      "select * from public.admin_record_payment($1, 60, 'CASH', null, $2)", [unpaid.invoice_id, user.id]
+    );
+    p1.invoice_status === 'PARTIAL' && Number(p1.remaining) === 40
+      ? pass('payment 60 of 100 -> PARTIAL, 40 remaining')
+      : fail('partial payment', new Error(JSON.stringify(p1)));
+    await expectError(
+      () => client.query("select public.admin_record_payment($1, 50, 'UPI', null, $2)", [unpaid.invoice_id, user.id]),
+      'PAYMENT_EXCEEDS_BALANCE',
+      'overpayment rejected'
+    );
+    const { rows: [{ admin_record_payment: p2 }] } = await client.query(
+      "select * from public.admin_record_payment($1, 40, 'UPI', 'UTR123', $2)", [unpaid.invoice_id, user.id]
+    );
+    const { rows: [paidSess] } = await client.query('select payment_status from public.sessions where id = $1', [payStart.admin_start_session]);
+    p2.invoice_status === 'PAID' && paidSess.payment_status === 'PAID'
+      ? pass('final payment -> invoice + session PAID')
+      : fail('final payment', new Error(JSON.stringify({ p2, paidSess })));
+
+    // 18. booking lookup + cancel by code + mobile
+    const later = new Date(Date.now() + 5 * 3600_000).toISOString();
+    const { rows: [{ public_create_booking: bk2 }] } = await client.query(
+      'select * from public.public_create_booking($1, $2, $3, $4, 60, null)',
+      ['Meera', '+91 98765 00009', ps5.id, later]
+    );
+    const { rows: [{ public_lookup_booking: found }] } = await client.query(
+      'select * from public.public_lookup_booking($1, $2)', [bk2.booking_code.toLowerCase(), '9876500009']
+    );
+    found.status === 'PENDING' && found.resource_name === 'PS5 01'
+      ? pass('lookup booking by code + mobile (format-insensitive)')
+      : fail('lookup booking', new Error(JSON.stringify(found)));
+    await expectError(
+      () => client.query('select public.public_lookup_booking($1, $2)', [bk2.booking_code, '9999999999']),
+      'BOOKING_NOT_FOUND',
+      'lookup with wrong mobile rejected'
+    );
+    const { rows: [{ public_cancel_booking: cancelled }] } = await client.query(
+      'select * from public.public_cancel_booking($1, $2)', [bk2.booking_code, '+919876500009']
+    );
+    cancelled.status === 'CANCELLED' ? pass('customer cancels own booking') : fail('cancel booking');
+    await expectError(
+      () => client.query('select public.public_cancel_booking($1, $2)', [bk2.booking_code, '9876500009']),
+      'BOOKING_NOT_CANCELLABLE',
+      'double cancel rejected'
+    );
 
     console.log('\n\x1b[32mAll schema + functional tests passed.\x1b[0m');
 

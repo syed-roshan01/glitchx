@@ -1,9 +1,10 @@
-﻿'use client';
+'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '@/lib/api-client';
+import { useApi, invalidate } from '@/lib/use-api';
 import { useRealtime, useDebouncedCallback } from '@/hooks/use-realtime';
-import { PageHeader, EmptyState } from '@/components/ui/misc';
+import { PageHeader, EmptyState, ErrorState } from '@/components/ui/misc';
 import { CardGridSkeleton } from '@/components/ui/skeleton';
 import { StatusBadge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -17,41 +18,31 @@ const TYPES = ['PLAYSTATION', 'PC', 'POOL', 'VR', 'SNOOKER', 'AIR_HOCKEY', 'XBOX
 
 export default function ResourcesPage() {
   const toast = useToast();
-  const [resources, setResources] = useState<Resource[] | null>(null);
-  const [plans, setPlans] = useState<PricingPlan[]>([]);
+  const { data, error, reload, mutate } = useApi<{ resources: Resource[] }>('/api/admin/resources');
+  const { data: planData } = useApi<{ plans: PricingPlan[] }>('/api/admin/pricing/plans');
+  const resources = data?.resources ?? null;
+  const plans = planData?.plans ?? [];
   const [editResource, setEditResource] = useState<Resource | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const load = useCallback(async () => {
-    try {
-      const [r, p] = await Promise.all([
-        api.get<{ resources: Resource[] }>('/api/admin/resources'),
-        api.get<{ plans: PricingPlan[] }>('/api/admin/pricing/plans'),
-      ]);
-      setResources(r.resources);
-      setPlans(p.plans);
-    } catch {
-      setResources([]);
-    }
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  const refetch = useDebouncedCallback(load, 400);
+  const load = reload;
+  const refetch = useDebouncedCallback(reload, 400);
   useRealtime('resources', refetch);
   useRealtime('sessions', refetch);
 
   async function setMaintenance(r: Resource, status: 'ACTIVE' | 'MAINTENANCE') {
     setBusy(true);
+    const prev = data;
+    mutate((d) => (d ? { ...d, resources: d.resources.map((x) => (x.id === r.id ? { ...x, status } : x)) } : d));
     try {
       await api.patch(`/api/admin/resources/${r.id}`, { status });
       toast.success(status === 'MAINTENANCE' ? `${r.name} set to maintenance` : `${r.name} is back online`);
-      refetch();
+      reload();
+      invalidate('/api/admin/dashboard');
     } catch (e: any) {
+      mutate(() => prev);
       toast.error(e.message);
     } finally {
       setBusy(false);
@@ -77,7 +68,7 @@ export default function ResourcesPage() {
     <div>
       <PageHeader
         title="Resources"
-        subtitle="Stations customers can book â€” add more anytime"
+        subtitle="Stations customers can book — add more anytime"
         actions={
           <Button onClick={() => setAddOpen(true)}>
             <Plus className="h-4 w-4" /> Add Resource
@@ -85,7 +76,9 @@ export default function ResourcesPage() {
         }
       />
 
-      {!resources ? (
+      {error && !data ? (
+        <ErrorState message={error.message} onRetry={reload} />
+      ) : !resources ? (
         <CardGridSkeleton cards={3} />
       ) : resources.length === 0 ? (
         <EmptyState
@@ -153,7 +146,7 @@ export default function ResourcesPage() {
         onClose={() => setDeleteId(null)}
         onConfirm={remove}
         title="Delete resource?"
-        message="Resources with session history cannot be deleted â€” disable them instead."
+        message="Resources with session history cannot be deleted — disable them instead."
         confirmLabel="Delete"
         danger
         loading={busy}
@@ -248,7 +241,7 @@ function ResourceModal({
             <Select value={form.defaultPricingPlanId} onChange={(e) => setForm({ ...form, defaultPricingPlanId: e.target.value })}>
               <option value="">Cheapest plan for type</option>
               {typePlans.map((p) => (
-                <option key={p.id} value={p.id}>{p.name} Â· â‚¹{p.price}</option>
+                <option key={p.id} value={p.id}>{p.name} · ₹{p.price}</option>
               ))}
             </Select>
           </Field>

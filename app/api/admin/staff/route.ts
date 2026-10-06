@@ -23,7 +23,7 @@ export async function GET(_req: NextRequest) {
 export async function POST(req: NextRequest) {
   const { ctx, response } = await requireAuth(['ADMIN']);
   if (!ctx) return response!;
-  const { admin, userId, profile } = ctx;
+  const { admin, userId } = ctx;
 
   let body: any;
   try {
@@ -35,18 +35,6 @@ export async function POST(req: NextRequest) {
   const parsed = staffCreateSchema.safeParse(body);
   if (!parsed.success) return jsonError(parsed.error.issues[0]?.message ?? 'Invalid staff details');
   const input = parsed.data;
-
-  // prevent demoting yourself into a lockout: last active admin safeguard
-  if (input.role !== 'ADMIN' && profile.role === 'ADMIN') {
-    const { count } = await admin
-      .from('profiles')
-      .select('id', { count: 'exact', head: true })
-      .eq('role', 'ADMIN')
-      .eq('active', true);
-    if ((count ?? 0) <= 1) {
-      return jsonError('You need at least one other active admin before creating non-admin staff.', 409);
-    }
-  }
 
   const { data: authUser, error: createError } = await admin.auth.admin.createUser({
     email: input.email,
@@ -62,13 +50,17 @@ export async function POST(req: NextRequest) {
     return jsonError(`Could not create the account: ${msg}`, 400);
   }
 
-  // handle_new_user trigger creates the profile as STAFF; set the real role
+  // handle_new_user creates an INACTIVE STAFF profile; set the real role and
+  // activate it (upsert covers a missing profile row)
   if (authUser.user) {
     const { error: roleError } = await admin
       .from('profiles')
-      .update({ role: input.role, name: input.name, email: input.email })
-      .eq('id', authUser.user.id);
-    if (roleError) return jsonError('Account created but role assignment failed', 500);
+      .upsert({ id: authUser.user.id, role: input.role, name: input.name, email: input.email, active: true });
+    if (roleError) {
+      // roll back so a half-created account isn't left behind
+      await admin.auth.admin.deleteUser(authUser.user.id).catch(() => {});
+      return jsonError('Could not finish creating the account. Please try again.', 500);
+    }
 
     await audit(admin, userId, 'staff.created', 'profile', authUser.user.id, {
       email: input.email,

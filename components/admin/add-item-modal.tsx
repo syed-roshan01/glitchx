@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/components/ui/toast';
 import { api } from '@/lib/api-client';
+import { useApi, invalidate } from '@/lib/use-api';
 import { formatMoney } from '@/lib/billing/format';
 import type { MenuItem, SessionItem } from '@/types';
 import { Search, Minus, Plus, PackageX } from 'lucide-react';
@@ -24,21 +25,15 @@ export function AddItemModal({
   onAdded: (items: SessionItem[]) => void;
 }) {
   const toast = useToast();
-  const [items, setItems] = useState<MenuItem[]>([]);
-  const [loading, setLoading] = useState(false);
+  const { data, error, loading, reload } = useApi<{ items: MenuItem[] }>(open ? '/api/admin/items' : null);
+  const items = useMemo(() => (data?.items ?? []).filter((i) => i.active), [data]);
   const [query, setQuery] = useState('');
   const [cart, setCart] = useState<Record<string, number>>({});
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (!open) return;
-    setLoading(true);
-    api
-      .get<{ items: MenuItem[] }>('/api/admin/items')
-      .then((r) => setItems(r.items.filter((i) => i.active)))
-      .catch((e) => toast.error(e.message))
-      .finally(() => setLoading(false));
-  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (open) reload();
+  }, [open, reload]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -63,27 +58,44 @@ export function AddItemModal({
 
   async function addAll() {
     setBusy(true);
-    try {
-      let latest: SessionItem[] = [];
-      for (const [itemId, quantity] of Object.entries(cart)) {
-        const src = items.find((i) => i.id === itemId);
-        const itemType =
-          src?.category === 'DRINK' ? 'DRINK' : src?.category === 'SNACK' || src?.category === 'FOOD' ? 'FOOD' : 'OTHER';
+    let latest: SessionItem[] | null = null;
+    let added = 0;
+    const failed: { name: string; message: string }[] = [];
+    // Lines are posted one by one; each success is removed from the cart
+    // immediately so a retry after a partial failure never duplicates it.
+    for (const [itemId, quantity] of Object.entries(cart)) {
+      const src = items.find((i) => i.id === itemId);
+      const itemType =
+        src?.category === 'DRINK' ? 'DRINK' : src?.category === 'SNACK' || src?.category === 'FOOD' ? 'FOOD' : 'OTHER';
+      try {
         const res = await api.post<{ items: SessionItem[] }>(`/api/admin/sessions/${sessionId}/items`, {
           itemType,
           catalogId: itemId,
           quantity,
         });
         latest = res.items;
+        added += quantity;
+        setCart((c) => {
+          const copy = { ...c };
+          delete copy[itemId];
+          return copy;
+        });
+      } catch (e: any) {
+        failed.push({ name: src?.name ?? 'Item', message: e?.message ?? 'failed' });
       }
-      toast.success(`${cartCount} item(s) added`);
-      setCart({});
-      onAdded(latest);
+    }
+    setBusy(false);
+    if (latest) onAdded(latest);
+    if (added > 0) invalidate('/api/admin/items');
+    if (failed.length === 0) {
+      toast.success(`${added} item(s) added`);
       onClose();
-    } catch (e: any) {
-      toast.error(e.message);
-    } finally {
-      setBusy(false);
+    } else {
+      toast.error(
+        `${added > 0 ? `${added} item(s) added. ` : ''}Failed: ${failed
+          .map((f) => `${f.name} (${f.message})`)
+          .join(', ')}. Remaining items are still in the cart.`
+      );
     }
   }
 
@@ -102,6 +114,13 @@ export function AddItemModal({
 
       {loading ? (
         <p className="py-8 text-center text-sm text-muted">Loading items…</p>
+      ) : error && !data ? (
+        <div className="flex flex-col items-center gap-2 py-8 text-center text-sm text-muted">
+          {error.message}
+          <Button size="sm" variant="outline" onClick={reload}>
+            Retry
+          </Button>
+        </div>
       ) : filtered.length === 0 ? (
         <div className="flex flex-col items-center gap-2 py-8 text-center text-sm text-muted">
           <PackageX className="h-8 w-8 text-muted/50" aria-hidden />
