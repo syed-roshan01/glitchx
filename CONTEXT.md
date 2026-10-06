@@ -25,7 +25,7 @@
 | Supabase project ref | `vfonvktaqurwfapkgfuz` → `https://vfonvktaqurwfapkgfuz.supabase.co` |
 | Region | **Mumbai (ap-south-1)** — verified 2026-10-06 by mapping the DB host IP against AWS ip-ranges. (Earlier "not Mumbai" note was wrong; the ~100ms RTT was this machine's network.) Vercel functions pinned to `bom1` via `vercel.json` so server↔DB is same-region. |
 | Auth | Email/password, staff-only. **"Confirm email" is OFF.** First account via `/admin/setup` becomes ADMIN (claim via `claim_first_admin()`). |
-| Schema | ⚠️ **00014 written but NOT yet applied to live** — run `supabase/migrations/00014_security_payments_booking.sql` in the SQL Editor. 13 migrations applied (combined in [`supabase/setup.sql`](supabase/setup.sql); reset via [`supabase/reset.sql`](supabase/reset.sql)). Seed: PS5 ₹100/hr (+2h pkg ₹180), Pool ₹300/hr (+30min ₹150), Coke ₹40, Water ₹20, Chips ₹30, Extra Controller ₹50. |
+| Schema | 15 migrations, **all applied to live** (00014 verified present 2026-10-06 by probing its RPCs — `admin_record_payment`, `public_get_busy_slots`, `public_lookup_booking`, `public_cancel_booking`, `mobile_digits` all respond). Combined in [`supabase/setup.sql`](supabase/setup.sql); reset via [`supabase/reset.sql`](supabase/reset.sql). Seed baseline: PS5 ₹100/hr (+2h pkg ₹180), Pool ₹300/hr (+30min ₹150) — **user has since customized live pricing** (e.g. Pool ₹200/hr). |
 | Keys | All in `.env.local` (gitignored — never commit; rotate if leaked). Vercel has **3 env vars** (URL, anon, service_role). `NEXT_PUBLIC_APP_URL` deliberately NOT set — the booking QR falls back to the request origin, so it auto-tracks the domain. |
 | Custom domain | Not connected yet. When added in Vercel → Settings → Domains, QR + everything follows automatically. |
 
@@ -33,6 +33,8 @@
 
 | Commit | What |
 |---|---|
+| `d7ad75a` | ⚠️ **Accidental sweep** — message says "dev-server cache fix" but it actually contains session 3's full review/fix pass (~71 files: /book rebuild, 00014, use-api caching, vercel.json) that was staged-but-uncommitted when session 4 committed. Work is verified-good; only the message is misleading. Lesson: **never run two AI sessions in this folder simultaneously** — session 3's live edits also corrupted the dev HMR cache and caused a CONTEXT.md write conflict. |
+| `814374c` | CONTEXT.md created (living document) |
 | `21d758e` | Perf: signed-identity fast-path auth (0 network round-trips in API routes), parallel dashboard/reports queries, cached settings |
 | `120edda` | Homepage redesign: arcade HUD aesthetic, framer-motion, Anton + Chakra Petch fonts, glitch effects, marquee, tilt cards |
 | `5fcf6b1` | Marketing homepage v1 (later replaced) |
@@ -149,20 +151,39 @@ DB exclusion constraints; invoice prices snapshotted (immutable history).
     for Node 22. A stale dev server (scripts/dev-server.cjs) was found running and
     rewriting `.next` — stop it before `next build`.
 
+- **2026-10-06 (session 4):** Cleanup + reconciliation after discovering session 3 ran
+  in parallel in this folder.
+  - Dev server crashed with stale-HMR-cache error
+    (`__webpack_modules__[moduleId] is not a function` on `/`) → fixed by wiping
+    `.next` (fix documented in §5).
+  - Discovered commit `d7ad75a` had accidentally swept in session 3's staged work
+    under a wrong message (see §3). Ran full verification of the merged state:
+    typecheck ✓, billing tests 26/26 ✓, DB suite (incl. 00014) + reset cycle ✓,
+    dev server serving ✓.
+  - **Verified live DB state empirically** (probes in `.pgtest/probe-00014-fns.cjs`,
+    `security-probe.cjs`): 00014 IS fully applied (all five new RPCs respond),
+    self-signups create INACTIVE profiles ✓, anon cannot execute admin functions
+    (401 permission denied) ✓ — the session-3 note "00014 not applied" was stale.
+  - Probe gotcha documented: PostgREST returns **404 for wrong RPC parameter
+    names**, which looks identical to "function missing" — verify signatures before
+    concluding a migration didn't run.
+  - User has customized live pricing (Pool ₹200/hr) → admin account is in active use.
+
 ## 9. Known issues / pending
 
-1. **Apply 00014 to live Supabase** (SQL Editor) and redeploy — security fixes and
-   the new booking/payment RPCs depend on it. Then review `profiles` for any
-   unknown self-signed-up accounts and deactivate them. Optionally disable
-   "Allow new users to sign up" in Supabase Auth settings after setup.
-2. **Admin account status unconfirmed** — user was told to complete
-   `/admin/setup`; never explicitly confirmed. Check: dashboard → does login work /
-   `public_setup_status` → `needs_admin`.
+1. ~~Apply 00014 to live Supabase~~ **DONE — verified applied 2026-10-06** (session 4
+   probes). Still worth reviewing `profiles` for unknown self-signed-up accounts from
+   before the hardening (created while the old active-by-default trigger was live),
+   and optionally disabling "Allow new users to sign up" in Supabase Auth settings.
+2. **Admin account confirmed in use** — user has customized pricing via the admin
+   panel (observed 2026-10-06).
 3. Custom domain + printed QR not done yet (QR auto-tracks origin once domain is added).
 4. Optional: pg_cron for `activate_due_sessions` (currently lazy on page loads — fine
    for one cafe); WhatsApp/SMS waitlist notifications; logo upload to Supabase Storage.
 5. `next.config.mjs` carries `workerThreads: true` + `NEXT_DISABLE_BUILD_WORKER`
    opt-in — safe, documented in README §6 note.
+6. **Avoid parallel AI sessions in this folder** — see the `d7ad75a` note in §3.
+   If it happens anyway: check `git status` before any commit.
 
 ## 10. Next-session quick start
 
