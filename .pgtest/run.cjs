@@ -400,6 +400,111 @@ async function main() {
       'double cancel rejected'
     );
 
+    // 19. quick-start walk-in session with a custom price
+    const { rows: [{ price: ps5Price }] } = await client.query('select price from public.pricing_plans where id = $1', [plan.id]);
+    const { rows: [{ admin_start_session: walkId }] } = await client.query(
+      'select public.admin_start_session(null, $1, $2, now(), null, null, null, $3, $4, null, null)',
+      [ps5.id, plan.id, user.id, 120]
+    );
+    const { rows: [walk] } = await client.query('select customer_id, status, pricing_plan_snapshot as snap from public.sessions where id = $1', [walkId]);
+    walk.customer_id === null && walk.status === 'ACTIVE' && Number(walk.snap.price) === 120 && walk.snap.custom === true && Number(walk.snap.base_price) === Number(ps5Price)
+      ? pass('walk-in starts with no customer + custom price 120 (base kept)')
+      : fail('walk-in custom start', new Error(JSON.stringify(walk)));
+    await client.query('select public.admin_set_session_price($1, $2)', [walkId, 90]);
+    const { rows: [rp1] } = await client.query('select pricing_plan_snapshot as snap from public.sessions where id = $1', [walkId]);
+    await client.query('select public.admin_set_session_price($1, $2)', [walkId, ps5Price]);
+    const { rows: [rp2] } = await client.query('select pricing_plan_snapshot as snap from public.sessions where id = $1', [walkId]);
+    Number(rp1.snap.price) === 90 && rp1.snap.custom === true && Number(rp2.snap.price) === Number(ps5Price) && !('custom' in rp2.snap)
+      ? pass('change price mid-session; resetting to plan price clears the custom flag')
+      : fail('set session price', new Error(JSON.stringify({ rp1, rp2 })));
+    await client.query('select public.admin_set_session_customer($1, $2, null, $3)', [walkId, 'Kabir', user.id]);
+    const { rows: [{ admin_end_session_and_invoice: walkEnd }] } = await client.query(
+      'select * from public.admin_end_session_and_invoice($1, $2, null, 0, $3, null, $4)',
+      [walkId, JSON.stringify({ duration_seconds: 0, gaming_amount: 37.5 }), 'CASH', user.id]
+    );
+    const { rows: [wInv1] } = await client.query('select customer_name, customer_mobile, customer_id from public.invoices where id = $1', [walkEnd.invoice_id]);
+    wInv1.customer_name === 'Kabir' && wInv1.customer_mobile === '' && wInv1.customer_id === null
+      ? pass('name-only walk-in → invoice "Kabir", no customer record')
+      : fail('walk-in invoice name', new Error(JSON.stringify(wInv1)));
+    await client.query('select public.admin_set_session_customer($1, $2, $3, $4)', [walkId, 'Kabir S', '+91 99999 11111', user.id]);
+    const { rows: [wInv2] } = await client.query('select customer_name, customer_mobile, customer_id from public.invoices where id = $1', [walkEnd.invoice_id]);
+    wInv2.customer_name === 'Kabir S' && wInv2.customer_mobile === '+91 99999 11111' && wInv2.customer_id
+      ? pass('details added after billing → customer created + invoice updated')
+      : fail('late customer details', new Error(JSON.stringify(wInv2)));
+    // same number typed differently must not create a duplicate customer
+    const { rows: [{ id: sameCust }] } = await client.query(
+      'select public.admin_find_or_create_customer($1, $2, null, $3) as id', ['Kabir', '9999911111', user.id]
+    );
+    sameCust === wInv2.customer_id ? pass('mobile match ignores formatting (no duplicate customer)') : fail('mobile normalisation');
+
+    // anonymous walk-in with no details at all → "Walk-in"
+    const { rows: [{ admin_start_session: anonWalk }] } = await client.query(
+      'select public.admin_start_session(null, $1, $2, now(), null, null, null, $3)', [ps5.id, plan.id, user.id]
+    );
+    const { rows: [{ admin_end_session_and_invoice: anonEnd }] } = await client.query(
+      'select * from public.admin_end_session_and_invoice($1, $2, null, 0, null, null, $3)',
+      [anonWalk, JSON.stringify({ duration_seconds: 0, gaming_amount: 0 }), user.id]
+    );
+    const { rows: [aInv] } = await client.query('select customer_name from public.invoices where id = $1', [anonEnd.invoice_id]);
+    aInv.customer_name === 'Walk-in' ? pass('no details → invoice shows "Walk-in"') : fail('walk-in default name', new Error(JSON.stringify(aInv)));
+
+    // 20. estimates follow the cafe rounding policy (ROUND_UP_15 seed)
+    const { rows: [{ billing_mode: bm }] } = await client.query("select billing_mode from public.settings where id = 'default'");
+    const { rows: [{ e56 }] } = await client.query('select public.estimate_booking_amount($1, 56) as e56', [ps5.id]);
+    const { rows: [{ e60 }] } = await client.query('select public.estimate_booking_amount($1, 60) as e60', [ps5.id]);
+    bm === 'ROUND_UP_15' && Number(e56) === Number(e60)
+      ? pass(`estimate for 56 min = 60 min (₹${e60}) under ${bm}`)
+      : fail('estimate rounding', new Error(JSON.stringify({ bm, e56, e60 })));
+
+    // 21. check-in uses the station's default plan, not the cheapest
+    const { rows: [poolRes] } = await client.query("select id, type from public.resources where name = 'Pool Table'");
+    await client.query(
+      "insert into public.pricing_plans (name, resource_type, billing_type, price, duration_minutes, active) values ('Pool cheap pkg', $1, 'PACKAGE', 1, 30, true)",
+      [poolRes.type]
+    );
+    const { rows: [poolHourly] } = await client.query("select id from public.pricing_plans where name = 'Pool Hourly'");
+    await client.query('update public.resources set default_pricing_plan_id = $1 where id = $2', [poolHourly.id, poolRes.id]);
+    const poolStart = new Date(Date.now() + 60_000).toISOString();
+    const { rows: [{ public_create_booking: poolBk }] } = await client.query(
+      'select * from public.public_create_booking($1, $2, $3, $4, 60, null)', ['Zara', '9876500077', poolRes.id, poolStart]
+    );
+    const { rows: [{ sid: poolSid }] } = await client.query('select public.admin_check_in_booking($1, $2) as sid', [poolBk.id, user.id]);
+    const { rows: [poolSess] } = await client.query('select pricing_plan_id from public.sessions where id = $1', [poolSid]);
+    poolSess.pricing_plan_id === poolHourly.id
+      ? pass('check-in uses the station default plan (not the cheapest package)')
+      : fail('check-in plan choice', new Error(JSON.stringify(poolSess)));
+    await client.query('select public.admin_end_session_and_invoice($1, $2, null, 0, null, null, $3)', [poolSid, JSON.stringify({ duration_seconds: 0, gaming_amount: 0 }), user.id]);
+    await client.query("update public.pricing_plans set active = false where name = 'Pool cheap pkg'");
+
+    // 22. ledger + ACLs for the new functions
+    await client.query(
+      "insert into public.ledger_entries (entry_type, category, amount, entry_date, payment_method, created_by) values ('EXPENSE', 'Electricity', 2500, current_date, 'UPI', $1)",
+      [user.id]
+    );
+    const { rows: [{ n: ledgerN }] } = await client.query('select count(*)::int as n from public.ledger_entries');
+    ledgerN === 1 ? pass('ledger entry recorded') : fail('ledger insert');
+    await client.query('set role anon');
+    for (const fn of [
+      "public.admin_set_session_price('00000000-0000-0000-0000-000000000000', 1)",
+      "public.admin_set_session_customer('00000000-0000-0000-0000-000000000000', 'x', null, null)",
+      "public.admin_start_session(null, '00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000000')",
+    ]) {
+      const name = fn.split('(')[0];
+      try {
+        await client.query(`select ${fn}`);
+        fail(`anon must not execute ${name}`);
+      } catch (e) {
+        /permission denied/.test(e.message) ? pass(`anon blocked from ${name}`) : fail(`anon exec ${name}`, e);
+      }
+    }
+    try {
+      await client.query('select count(*) from public.ledger_entries');
+      fail('anon must not read the ledger');
+    } catch (e) {
+      /permission denied/.test(e.message) ? pass('anon blocked from ledger') : fail('anon ledger', e);
+    }
+    await client.query('reset role');
+
     console.log('\n\x1b[32mAll schema + functional tests passed.\x1b[0m');
 
     // ---- reset + re-run cycle (recovery flow for a failed first run) ----

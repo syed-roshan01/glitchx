@@ -85,8 +85,8 @@ export default function CustomersPage() {
             <tbody className="divide-y divide-border">
               {customers.map((c) => (
                 <tr key={c.id} className="transition-colors hover:bg-surface-2/50">
-                  <td className="px-4 py-3 font-semibold">{c.name}</td>
-                  <td className="px-4 py-3 font-mono text-muted">{c.mobile}</td>
+                  <td className="px-4 py-3 font-semibold">{c.name || 'Walk-in'}</td>
+                  <td className="px-4 py-3 font-mono text-muted">{c.mobile || '—'}</td>
                   <td className="px-4 py-3 text-muted">{c.email ?? '—'}</td>
                   <td className="px-4 py-3 text-muted">{formatDate(c.created_at)}</td>
                   <td className="px-4 py-3 text-right">

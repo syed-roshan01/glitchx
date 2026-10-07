@@ -77,6 +77,8 @@ export function friendlyError(err: { message?: string; code?: string } | null | 
       return 'This invoice has been voided.';
     case 'PAYMENT_EXCEEDS_BALANCE':
       return 'Payment exceeds the remaining balance.';
+    case 'INVALID_PRICE':
+      return 'Please enter a valid price.';
     case 'NOT_AUTHENTICATED':
       return 'You must be signed in.';
     default:

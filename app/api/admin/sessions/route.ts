@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, jsonError, friendlyError, audit, pageParams } from '@/lib/supabase/api';
 import { mapSession } from '@/lib/mappers';
-import { startSessionSchema, quickCustomerSchema } from '@/lib/validations/schemas';
+import { startSessionSchema } from '@/lib/validations/schemas';
 import { toIsoOrNull } from '@/lib/utils/misc';
 
 export const dynamic = 'force-dynamic';
@@ -56,8 +56,9 @@ export async function GET(req: NextRequest) {
 }
 
 /** POST /api/admin/sessions — start a session (walk-in or scheduled).
- *  Body: { customerId } OR { newCustomer: {name, mobile, email?} },
- *        resourceId, pricingPlanId, startTime?, expectedMinutes?, bookingId?, notes? */
+ *  Body: resourceId, pricingPlanId, customPrice?, customerId?, guestName?,
+ *        guestMobile?, startTime?, expectedMinutes?, bookingId?, notes?
+ *  Customer details are optional (add them later via PATCH action 'customer'). */
 export async function POST(req: NextRequest) {
   const { ctx, response } = await requireAuth();
   if (!ctx) return response!;
@@ -70,29 +71,31 @@ export async function POST(req: NextRequest) {
     return jsonError('Invalid request body');
   }
 
-  let customerId: string | null = body?.customerId ?? null;
+  // legacy shape { newCustomer: {name, mobile} } → guest fields
+  if (body?.newCustomer && !body.guestName && !body.guestMobile) {
+    body.guestName = body.newCustomer.name ?? null;
+    body.guestMobile = body.newCustomer.mobile ?? null;
+  }
 
-  // quick walk-in customer creation (same request for a <15s flow)
-  if (!customerId && body?.newCustomer) {
-    const parsed = quickCustomerSchema.safeParse(body.newCustomer);
-    if (!parsed.success) {
-      return jsonError(parsed.error.issues[0]?.message ?? 'Invalid customer details');
-    }
+  const parsedInput = startSessionSchema.safeParse(body);
+  if (!parsedInput.success) {
+    return jsonError(parsedInput.error.issues[0]?.message ?? 'Invalid session details');
+  }
+  const input = parsedInput.data;
+
+  // customer details are OPTIONAL: a valid mobile links/creates a customer,
+  // a bare name is kept on the session as the walk-in's name
+  let customerId: string | null = input.customerId ?? null;
+  if (!customerId && input.guestMobile) {
     const { data: cid, error: cerr } = await admin.rpc('admin_find_or_create_customer', {
-      p_name: parsed.data.name,
-      p_mobile: parsed.data.mobile,
-      p_email: parsed.data.email || null,
+      p_name: input.guestName,
+      p_mobile: input.guestMobile,
+      p_email: null,
       p_acting_user: userId,
     });
     if (cerr) return jsonError(friendlyError(cerr), 400);
     customerId = cid;
   }
-
-  const parsedInput = startSessionSchema.safeParse({ ...body, customerId });
-  if (!parsedInput.success) {
-    return jsonError(parsedInput.error.issues[0]?.message ?? 'Invalid session details');
-  }
-  const input = parsedInput.data;
 
   const startTime =
     input.startTime && input.startTime !== 'now'
@@ -100,7 +103,7 @@ export async function POST(req: NextRequest) {
       : new Date().toISOString();
 
   const { data: sessionId, error } = await admin.rpc('admin_start_session', {
-    p_customer_id: input.customerId,
+    p_customer_id: customerId,
     p_resource_id: input.resourceId,
     p_pricing_plan_id: input.pricingPlanId,
     p_start_time: startTime,
@@ -108,12 +111,16 @@ export async function POST(req: NextRequest) {
     p_booking_id: input.bookingId ?? null,
     p_notes: input.notes ?? null,
     p_acting_user: userId,
+    p_custom_price: input.customPrice ?? null,
+    p_guest_name: input.guestName,
+    p_guest_mobile: input.guestMobile,
   });
   if (error) return jsonError(friendlyError(error), 400);
 
   await audit(admin, userId, 'session.started', 'session', sessionId, {
     resourceId: input.resourceId,
-    via: body?.newCustomer ? 'quick-create' : 'existing-customer',
+    customPrice: input.customPrice ?? null,
+    via: customerId ? 'customer' : 'walk-in',
     scheduled: new Date(startTime) > new Date(Date.now() + 60_000),
   });
 

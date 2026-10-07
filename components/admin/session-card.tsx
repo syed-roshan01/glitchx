@@ -11,6 +11,7 @@ import { formatMoney, formatDuration, formatClock } from '@/lib/billing/format';
 import { AddItemModal } from '@/components/admin/add-item-modal';
 import { AddServiceModal } from '@/components/admin/add-service-modal';
 import { EndSessionModal } from '@/components/admin/end-session-modal';
+import { CustomPriceBadge, customerLine, rateLabel } from '@/components/admin/pricing-display';
 import type { CafeSettings, PricingRule, Session, SessionItem } from '@/types';
 import { Gamepad2, CupSoda, Sparkles, Pause, Play, Square, Eye, Clock } from 'lucide-react';
 
@@ -99,8 +100,14 @@ export function SessionCard({
             <Gamepad2 className="h-4 w-4 shrink-0 text-primary" aria-hidden />
             <h3 className="truncate font-extrabold">{session.resource_name}</h3>
           </div>
-          <p className="mt-0.5 truncate text-sm text-muted">
-            {session.customer_name} · {session.customer_mobile}
+          <p className="mt-0.5 truncate text-sm text-muted">{customerLine(session)}</p>
+          <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs font-semibold text-muted">
+            <span className="tabular-nums">
+              {breakdown?.ruleApplied
+                ? `${formatMoney(breakdown.ruleApplied.price, sym)}/hr peak`
+                : rateLabel(session.pricing_plan_snapshot, sym)}
+            </span>
+            {session.pricing_plan_snapshot?.custom && <CustomPriceBadge />}
           </p>
         </div>
         <StatusBadge status={session.status} pulse={!paused} />

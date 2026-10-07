@@ -1,20 +1,23 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { api } from '@/lib/api-client';
 import { useApi, invalidate } from '@/lib/use-api';
+import { useAdmin } from '@/components/admin/admin-context';
 import { EmptyState, StatCard } from '@/components/ui/misc';
-import { StatusBadge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input, Field, Select } from '@/components/ui/input';
-import { Modal } from '@/components/ui/modal';
+import { Modal, ConfirmDialog } from '@/components/ui/modal';
 import { useToast } from '@/components/ui/toast';
 import { Logo } from '@/components/ui/logo';
 import { formatMoney, formatDateTime, formatDuration, formatClock } from '@/lib/billing/format';
+import { buildInvoicePdfFile, downloadBlob, type InvoicePdfFormat } from '@/lib/invoice-pdf';
 import type { CafeSettings, Invoice, InvoiceItem, Payment } from '@/types';
-import { ArrowLeft, Printer, FileText, Receipt, Share2, Banknote, CheckCircle2 } from 'lucide-react';
+import {
+  ArrowLeft, Printer, FileText, Receipt, Share2, Banknote, CheckCircle2, Download, MessageCircle, Trash2,
+} from 'lucide-react';
 
 interface InvoiceDetail {
   invoice: Invoice;
@@ -27,8 +30,42 @@ export default function InvoiceDetailPage() {
   const { id } = useParams<{ id: string }>();
   const toast = useToast();
   const { data, error, reload } = useApi<InvoiceDetail>(id ? `/api/admin/invoices/${id}` : null);
+  const router = useRouter();
+  const { profile } = useAdmin();
+  const isAdmin = profile.role === 'ADMIN';
   const [layout, setLayout] = useState<'a4' | 'thermal'>('a4');
   const [payOpen, setPayOpen] = useState(false);
+  const [pdfBusy, setPdfBusy] = useState<null | 'share' | 'download' | 'whatsapp'>(null);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  // Pre-build the PDF so share/download run inside the click's user gesture
+  // (navigator.share is rejected when too much async work happens first).
+  const pdfFormat: InvoicePdfFormat = layout === 'thermal' ? 'receipt' : 'a4';
+  const pdfKey = data
+    ? [
+        data.invoice.id, data.invoice.updated_at, data.invoice.status, data.payments.length,
+        data.invoice.customer_name, data.invoice.customer_mobile, pdfFormat,
+      ].join('|')
+    : null;
+  const pdfRef = useRef<{ key: string; file: Promise<File> } | null>(null);
+
+  const getPdf = useCallback((): Promise<File> => {
+    if (!data || !pdfKey) return Promise.reject(new Error('Invoice not loaded'));
+    if (pdfRef.current?.key !== pdfKey) {
+      const key = pdfKey;
+      const file = buildInvoicePdfFile(data.invoice, data.items, data.payments, data.settings, { format: pdfFormat });
+      file.catch(() => {
+        if (pdfRef.current?.key === key) pdfRef.current = null;
+      });
+      pdfRef.current = { key, file };
+    }
+    return pdfRef.current.file;
+  }, [data, pdfKey, pdfFormat]);
+
+  useEffect(() => {
+    if (pdfKey) getPdf().catch(() => {});
+  }, [getPdf, pdfKey]);
 
   const load = () => {
     reload();
@@ -68,17 +105,100 @@ export default function InvoiceDetailPage() {
     window.print();
   }
 
-  async function share() {
-    const url = window.location.href;
+  const cafe = settings.cafe_name || 'our cafe';
+  const shareText = `Invoice ${invoice.invoice_number} from ${cafe}`;
+  const waDigits = whatsappNumber(invoice.customer_mobile);
+
+  function canShareFile(file: File): boolean {
     try {
-      if (navigator.share) {
-        await navigator.share({ title: `Invoice ${invoice.invoice_number}`, url });
-      } else {
-        await navigator.clipboard.writeText(url);
-        toast.success('Invoice link copied');
-      }
+      return typeof navigator !== 'undefined' && !!navigator.canShare?.({ files: [file] });
     } catch {
-      /* user cancelled */
+      return false;
+    }
+  }
+
+  /** Returns true if the OS share sheet handled it. */
+  async function shareFile(file: File): Promise<boolean> {
+    if (!canShareFile(file)) return false;
+    try {
+      await navigator.share({ files: [file], title: shareText, text: shareText });
+    } catch (err: any) {
+      if (err?.name === 'AbortError') return true; // user closed the sheet
+      if (err?.name === 'NotAllowedError') return false; // gesture expired → fall back to download
+      throw err;
+    }
+    return true;
+  }
+
+  async function sharePdf() {
+    setPdfBusy('share');
+    try {
+      const file = await getPdf();
+      if (!(await shareFile(file))) {
+        downloadBlob(file, file.name);
+        toast.info('PDF downloaded — attach it in WhatsApp/email');
+      }
+    } catch (err: any) {
+      toast.error(err?.message || 'Could not create the PDF');
+    } finally {
+      setPdfBusy(null);
+    }
+  }
+
+  async function downloadPdf() {
+    setPdfBusy('download');
+    try {
+      const file = await getPdf();
+      downloadBlob(file, file.name);
+    } catch (err: any) {
+      toast.error(err?.message || 'Could not create the PDF');
+    } finally {
+      setPdfBusy(null);
+    }
+  }
+
+  async function whatsapp() {
+    setPdfBusy('whatsapp');
+    try {
+      const file = await getPdf();
+      // phones: the share sheet lets staff pick WhatsApp and attaches the file itself
+      if (await shareFile(file)) return;
+      downloadBlob(file, file.name);
+      if (!waDigits) {
+        toast.info('PDF downloaded — attach it in WhatsApp/email');
+        return;
+      }
+      const name = invoice.customer_name?.trim();
+      const msg =
+        `${name ? `Hi ${name}, ` : 'Hi, '}here is your invoice ${invoice.invoice_number} from ${cafe}` +
+        ` (total ${formatMoney(invoice.total_amount, sym)}). Thank you for playing!`;
+      const w = window.open(`https://wa.me/${waDigits}?text=${encodeURIComponent(msg)}`, '_blank', 'noopener,noreferrer');
+      toast.info(
+        w === null
+          ? 'PDF downloaded — pop-up blocked, open WhatsApp and attach it'
+          : 'PDF downloaded — attach it in the WhatsApp chat'
+      );
+    } catch (err: any) {
+      toast.error(err?.message || 'Could not create the PDF');
+    } finally {
+      setPdfBusy(null);
+    }
+  }
+
+  async function deleteInvoice() {
+    setDeleting(true);
+    try {
+      await api.delete(`/api/admin/invoices/${invoice.id}`);
+      invalidate('/api/admin/invoices');
+      invalidate('/api/admin/payments');
+      invalidate('/api/admin/dashboard');
+      toast.success(`Invoice ${invoice.invoice_number} deleted`);
+      setDeleteOpen(false);
+      router.push('/admin/invoices');
+    } catch (err: any) {
+      toast.error(err?.message || 'Could not delete invoice');
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -106,15 +226,33 @@ export default function InvoiceDetailPage() {
               <Receipt className="mr-1 inline h-3.5 w-3.5" /> Thermal 80mm
             </button>
           </div>
-          <Button variant="secondary" size="sm" onClick={share}>
-            <Share2 className="h-4 w-4" /> Share
+          <Button variant="secondary" size="sm" onClick={sharePdf} loading={pdfBusy === 'share'} disabled={!!pdfBusy}>
+            {pdfBusy !== 'share' && <Share2 className="h-4 w-4" />} Share PDF
           </Button>
+          <Button variant="outline" size="sm" onClick={downloadPdf} loading={pdfBusy === 'download'} disabled={!!pdfBusy}>
+            {pdfBusy !== 'download' && <Download className="h-4 w-4" />} Download PDF
+          </Button>
+          {waDigits && (
+            <Button variant="outline" size="sm" onClick={whatsapp} loading={pdfBusy === 'whatsapp'} disabled={!!pdfBusy}>
+              {pdfBusy !== 'whatsapp' && <MessageCircle className="h-4 w-4" />} WhatsApp
+            </Button>
+          )}
           <Button size="sm" onClick={print}>
-            <Printer className="h-4 w-4" /> Print / PDF
+            <Printer className="h-4 w-4" /> Print
           </Button>
           {invoice.status !== 'PAID' && invoice.status !== 'VOID' && remaining > 0 && (
             <Button variant="success" size="sm" onClick={() => setPayOpen(true)}>
               <Banknote className="h-4 w-4" /> Record payment
+            </Button>
+          )}
+          {isAdmin && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setDeleteOpen(true)}
+              className="text-danger hover:bg-danger/10 hover:text-danger"
+            >
+              <Trash2 className="h-4 w-4" /> Delete
             </Button>
           )}
         </div>
@@ -169,8 +307,28 @@ export default function InvoiceDetailPage() {
           load();
         }}
       />
+
+      <ConfirmDialog
+        open={deleteOpen}
+        onClose={() => !deleting && setDeleteOpen(false)}
+        onConfirm={deleteInvoice}
+        title="Delete invoice"
+        message={`Delete ${invoice.invoice_number}? This permanently removes the invoice and its payments. This cannot be undone.`}
+        confirmLabel="Delete"
+        danger
+        loading={deleting}
+      />
     </div>
   );
+}
+
+/** Customer mobile -> wa.me digits (prefix 91 for 10-digit Indian numbers). */
+function whatsappNumber(mobile: string | null | undefined): string | null {
+  let d = (mobile || '').replace(/\D/g, '');
+  if (!d) return null;
+  if (d.length === 11 && d.startsWith('0')) d = d.slice(1);
+  if (d.length === 10) d = `91${d}`;
+  return d.length >= 11 && d.length <= 15 ? d : null;
 }
 
 function A4Layout({
@@ -209,8 +367,8 @@ function A4Layout({
       <div className="mt-6 grid grid-cols-2 gap-6 text-sm">
         <div>
           <p className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Billed to</p>
-          <p className="mt-1 text-base font-bold">{invoice.customer_name}</p>
-          <p className="text-gray-700">{invoice.customer_mobile}</p>
+          <p className="mt-1 text-base font-bold">{invoice.customer_name?.trim() || 'Walk-in'}</p>
+          {invoice.customer_mobile && <p className="text-gray-700">{invoice.customer_mobile}</p>}
         </div>
         <div className="text-right">
           <p className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Session</p>
@@ -322,8 +480,8 @@ function ThermalLayout({
         <p className="text-[10px]">{formatDateTime(invoice.issued_at, settings.timezone)}</p>
       </div>
       <p className="my-1">{'─'.repeat(32)}</p>
-      <p className="text-[10px]">Customer: {invoice.customer_name}</p>
-      <p className="text-[10px]">Mobile: {invoice.customer_mobile}</p>
+      <p className="text-[10px]">Customer: {invoice.customer_name?.trim() || 'Walk-in'}</p>
+      {invoice.customer_mobile && <p className="text-[10px]">Mobile: {invoice.customer_mobile}</p>}
       <p className="text-[10px]">Station: {invoice.resource_name}</p>
       <p className="text-[10px]">
         {formatDateTime(invoice.session_start, settings.timezone)} – {formatClock(invoice.session_end, settings.timezone)}

@@ -132,7 +132,7 @@ export default function BookingsPage() {
                   {w.position}
                 </span>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-bold">{w.customer_name}</p>
+                  <p className="truncate text-sm font-bold">{w.customer_name || 'Walk-in'}</p>
                   <p className="truncate text-xs text-muted">
                     {w.resource_name ?? w.resource_type?.replace(/_/g, ' ') ?? 'Any resource'}
                     {w.requested_duration_minutes ? ` · ${w.requested_duration_minutes} min` : ''}
@@ -198,8 +198,8 @@ export default function BookingsPage() {
                 <tr key={b.id} className="transition-colors hover:bg-surface-2/50">
                   <td className="px-4 py-3 font-mono text-xs font-bold text-secondary">{b.booking_code}</td>
                   <td className="px-4 py-3">
-                    <p className="font-semibold">{b.customer_name}</p>
-                    <p className="text-xs text-muted">{b.customer_mobile}</p>
+                    <p className="font-semibold">{b.customer_name || 'Walk-in'}</p>
+                    {b.customer_mobile && <p className="text-xs text-muted">{b.customer_mobile}</p>}
                   </td>
                   <td className="px-4 py-3 text-muted">{b.resource_name}</td>
                   <td className="px-4 py-3">

@@ -19,10 +19,12 @@ import { formatMoney, formatDuration, formatClock, formatDateTime } from '@/lib/
 import { AddItemModal } from '@/components/admin/add-item-modal';
 import { AddServiceModal } from '@/components/admin/add-service-modal';
 import { EndSessionModal } from '@/components/admin/end-session-modal';
+import { CustomerCard, PriceCard } from '@/components/admin/session-edit-cards';
+import { CustomPriceBadge, billingModeText, customerLine, rateLabel } from '@/components/admin/pricing-display';
 import type { CafeSettings, Invoice, PricingRule, Session, SessionItem } from '@/types';
 import {
   CupSoda, Sparkles, Pause, Play, Square, Percent, Receipt, ArrowLeft,
-  Phone, Gamepad2, Clock, NotebookPen,
+  Gamepad2, Clock, NotebookPen,
 } from 'lucide-react';
 
 interface SessionDetail {
@@ -132,6 +134,13 @@ export default function SessionDetailPage() {
   const sym = settings.currency_symbol || '₹';
   const bill = breakdown ?? data.breakdown;
 
+  /** optimistic local edit of the session; returns a rollback */
+  function optimistic(fn: (s: Session) => Session): () => void {
+    const prev = data;
+    mutate((d) => (d ? { ...d, session: fn(d.session) } : d));
+    return () => mutate(() => prev);
+  }
+
   async function togglePause() {
     if (!session || pauseBusy) return;
     const resuming = session.status === 'PAUSED';
@@ -172,7 +181,7 @@ export default function SessionDetailPage() {
 
       <PageHeader
         title={session.resource_name ?? 'Session'}
-        subtitle={`${session.customer_name} · ${session.customer_mobile}`}
+        subtitle={customerLine(session)}
         actions={<StatusBadge status={session.status} pulse={live && session.status === 'ACTIVE'} />}
       />
 
@@ -187,6 +196,17 @@ export default function SessionDetailPage() {
             <p className="text-xs text-muted">
               Started {formatClock(session.actual_start_time, settings.timezone)}
               {session.status === 'PAUSED' && ' · PAUSED — not billing'}
+            </p>
+            <p className="mt-2 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-sm">
+              <span className="font-bold text-content">
+                {bill.ruleApplied
+                  ? `${formatMoney(bill.ruleApplied.price, sym)}/hr (peak)`
+                  : rateLabel(session.pricing_plan_snapshot, sym)}
+              </span>
+              {session.pricing_plan_snapshot.custom && <CustomPriceBadge />}
+              <span className="text-muted">
+                · {bill.billableMinutes} billable min · {billingModeText(settings.billing_mode, settings.min_billing_minutes)}
+              </span>
             </p>
           </div>
           <div className="grid grid-cols-2 gap-3 border-t border-border pt-4 sm:grid-cols-4">
@@ -233,32 +253,41 @@ export default function SessionDetailPage() {
       )}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        {/* details */}
-        <div className="glass rounded-2xl p-5 shadow-card lg:col-span-1">
-          <h2 className="mb-4 text-sm font-bold uppercase tracking-wider text-muted">Details</h2>
-          <dl className="space-y-3 text-sm">
-            <Detail icon={<Gamepad2 className="h-4 w-4" />} label="Resource" value={session.resource_name ?? '—'} />
-            <Detail icon={<Phone className="h-4 w-4" />} label="Mobile" value={session.customer_mobile ?? '—'} />
-            <Detail icon={<Clock className="h-4 w-4" />} label="Plan" value={session.pricing_plan_snapshot?.name ?? '—'} />
-            <Detail
-              icon={<Percent className="h-4 w-4" />}
-              label="Discount"
-              value={
-                session.discount_type
-                  ? `${session.discount_type === 'PERCENT' ? session.discount_value + '%' : formatMoney(session.discount_value ?? 0, sym)} off`
-                  : 'None'
-              }
-            />
-          </dl>
-          {session.notes && (
-            <p className="mt-4 rounded-xl border border-border bg-surface-2 p-3 text-xs text-muted">{session.notes}</p>
-          )}
-          <button
-            className="mt-4 inline-flex items-center gap-1.5 text-xs font-bold text-secondary hover:underline"
-            onClick={() => setNotesOpen(true)}
-          >
-            <NotebookPen className="h-3.5 w-3.5" /> {session.notes ? 'Edit notes' : 'Add notes'}
-          </button>
+        {/* customer + price + details */}
+        <div className="space-y-4 lg:col-span-1">
+          <CustomerCard session={session} onOptimistic={optimistic} onSaved={load} />
+          <PriceCard
+            session={session}
+            sym={sym}
+            editable={live || session.status === 'SCHEDULED'}
+            onOptimistic={optimistic}
+            onSaved={load}
+          />
+          <div className="glass rounded-2xl p-5 shadow-card">
+            <h2 className="mb-4 text-sm font-bold uppercase tracking-wider text-muted">Details</h2>
+            <dl className="space-y-3 text-sm">
+              <Detail icon={<Gamepad2 className="h-4 w-4" />} label="Resource" value={session.resource_name ?? '—'} />
+              <Detail icon={<Clock className="h-4 w-4" />} label="Plan" value={session.pricing_plan_snapshot?.name ?? '—'} />
+              <Detail
+                icon={<Percent className="h-4 w-4" />}
+                label="Discount"
+                value={
+                  session.discount_type
+                    ? `${session.discount_type === 'PERCENT' ? session.discount_value + '%' : formatMoney(session.discount_value ?? 0, sym)} off`
+                    : 'None'
+                }
+              />
+            </dl>
+            {session.notes && (
+              <p className="mt-4 rounded-xl border border-border bg-surface-2 p-3 text-xs text-muted">{session.notes}</p>
+            )}
+            <button
+              className="mt-4 inline-flex min-h-[32px] items-center gap-1.5 text-xs font-bold text-secondary hover:underline"
+              onClick={() => setNotesOpen(true)}
+            >
+              <NotebookPen className="h-3.5 w-3.5" /> {session.notes ? 'Edit notes' : 'Add notes'}
+            </button>
+          </div>
         </div>
 
         {/* line items */}

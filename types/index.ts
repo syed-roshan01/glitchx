@@ -117,15 +117,23 @@ export interface PlanSnapshot {
   billing_type: BillingType;
   price: number;
   duration_minutes: number | null;
+  /** true when staff typed a custom price for this session (peak rules don't apply) */
+  custom?: boolean;
+  /** the plan's catalog price when `custom` is set */
+  base_price?: number;
 }
 
 export interface Session {
   id: string;
   booking_id: string | null;
-  customer_id: string;
+  /** null for walk-ins whose details haven't been added yet */
+  customer_id: string | null;
   resource_id: string;
   pricing_plan_id: string | null;
   pricing_plan_snapshot: PlanSnapshot;
+  /** name/mobile typed for a walk-in (optional, can be added later) */
+  guest_name: string | null;
+  guest_mobile: string | null;
   status: SessionStatus;
   scheduled_start_time: string | null;
   actual_start_time: string | null;
@@ -146,9 +154,10 @@ export interface Session {
   created_by: string | null;
   created_at: string;
   updated_at: string;
-  // joined fields (optional — populated by API)
-  customer_name?: string;
-  customer_mobile?: string;
+  // joined fields (optional — populated by API). Falls back to the guest
+  // name/mobile; null when no customer details were given ("Walk-in").
+  customer_name?: string | null;
+  customer_mobile?: string | null;
   resource_name?: string;
   resource_type?: string;
 }
@@ -324,3 +333,40 @@ export interface DashboardStats {
   avgBillValue: number;
   utilization: { resourceId: string; name: string; minutes: number; sessions: number }[];
 }
+
+// ---- Income & expense tracker ----
+export type LedgerEntryType = 'INCOME' | 'EXPENSE';
+
+export interface LedgerEntry {
+  id: string;
+  entry_type: LedgerEntryType;
+  category: string;
+  amount: number;
+  entry_date: string; // YYYY-MM-DD (cafe-local date)
+  payment_method: PaymentMethod | null;
+  description: string | null;
+  created_by: string | null;
+  created_by_name?: string | null;
+  created_at: string;
+}
+
+export interface LedgerSummary {
+  /** payments received for sessions/invoices in the range */
+  sessionIncome: number;
+  /** manual INCOME entries */
+  otherIncome: number;
+  totalIncome: number;
+  expenses: number;
+  net: number;
+  byCategory: { entry_type: LedgerEntryType; category: string; amount: number }[];
+  daily: { date: string; income: number; expense: number }[];
+}
+
+export const EXPENSE_CATEGORIES = [
+  'Rent', 'Electricity', 'Internet', 'Salaries', 'Snacks & drinks stock',
+  'Games & subscriptions', 'Equipment & repairs', 'Marketing', 'Other',
+] as const;
+
+export const INCOME_CATEGORIES = [
+  'Tournament', 'Snacks & drinks (counter)', 'Event / party booking', 'Merchandise', 'Other',
+] as const;

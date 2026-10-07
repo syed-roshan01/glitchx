@@ -24,8 +24,36 @@ export const quickCustomerSchema = z.object({
   email: z.union([z.string().trim().email(), z.literal(''), z.null()]).optional(),
 });
 
+/** optional free-text customer details (walk-ins can start without them) */
+const optionalName = z
+  .string()
+  .trim()
+  .max(120)
+  .optional()
+  .nullable()
+  .transform((v) => (v ? v : null));
+const optionalMobile = z
+  .string()
+  .trim()
+  .optional()
+  .nullable()
+  .transform((v) => (v ? v.replace(/[\s\-()]/g, '') : null))
+  .pipe(z.string().regex(/^\+?\d{7,15}$/, 'Enter a valid mobile number').nullable());
+
+export const sessionCustomerSchema = z.object({
+  name: optionalName,
+  mobile: optionalMobile,
+});
+
+export const sessionPriceSchema = z.object({
+  price: z.number().min(0, 'Price cannot be negative').max(1000000),
+});
+
 export const startSessionSchema = z.object({
-  customerId: z.string().uuid(),
+  customerId: z.string().uuid().optional().nullable(),
+  guestName: optionalName,
+  guestMobile: optionalMobile,
+  customPrice: z.number().min(0).max(1000000).optional().nullable(),
   resourceId: z.string().uuid(),
   pricingPlanId: z.string().uuid(),
   startTime: z.string().optional().nullable(), // ISO datetime; empty => now
@@ -39,6 +67,9 @@ export const endSessionSchema = z.object({
   discountValue: z.number().min(0).max(100000).optional().nullable(),
   paymentMethod: z.enum(['CASH', 'UPI', 'CARD', 'OTHER']).optional().nullable(),
   paymentReference: z.string().max(120).optional().nullable(),
+  /** optional — set/replace the customer details before invoicing */
+  customerName: optionalName,
+  customerMobile: optionalMobile,
 });
 
 export const addSessionItemSchema = z.object({
@@ -195,4 +226,13 @@ export const paymentSchema = z.object({
   amount: z.number().min(0.01).max(10000000),
   paymentMethod: z.enum(['CASH', 'UPI', 'CARD', 'OTHER']),
   transactionReference: z.string().max(120).optional().nullable(),
+});
+
+export const ledgerEntrySchema = z.object({
+  entryType: z.enum(['INCOME', 'EXPENSE']),
+  category: z.string().trim().min(1, 'Pick a category').max(60),
+  amount: z.number().positive('Amount must be more than 0').max(100000000),
+  entryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Invalid date'),
+  paymentMethod: z.enum(['CASH', 'UPI', 'CARD', 'OTHER']).optional().nullable(),
+  description: z.string().trim().max(500).optional().nullable(),
 });

@@ -1,133 +1,155 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api-client';
 import { useApi, invalidate } from '@/lib/use-api';
 import { useSettings } from '@/components/admin/admin-context';
 import { PageHeader } from '@/components/ui/misc';
 import { Button } from '@/components/ui/button';
-import { Input, Field } from '@/components/ui/input';
+import { Input } from '@/components/ui/input';
 import { useToast } from '@/components/ui/toast';
 import { useRealtime, useDebouncedCallback } from '@/hooks/use-realtime';
-import { formatMoney, toLocalInputValue } from '@/lib/billing/format';
+import { formatMoney, formatMinutes, toLocalInputValue } from '@/lib/billing/format';
 import { estimateBookingAmount } from '@/lib/billing/engine';
-import type { Customer, PricingPlan, Resource } from '@/types';
-import { Search, UserPlus, Check, Zap, Clock, CalendarClock, Rocket, Users } from 'lucide-react';
+import {
+  billingModeExplainer, billingModeText, CustomPriceBadge, customerLabel, defaultPlanFor,
+  looksLikeMobile, priceUnitLabel, rateLabel,
+} from '@/components/admin/pricing-display';
+import type { Customer, PlanSnapshot, PricingPlan, Resource, Session } from '@/types';
+import {
+  Timer, ChevronDown, Gamepad2, User, Phone, X, Check, Zap, Clock, CalendarClock, Info, RotateCcw,
+} from 'lucide-react';
 
 type StartMode = 'now' | '+5' | '+10' | 'custom';
 
-/** Fast walk-in flow: customer → resource → start time → plan → start.
- *  Designed for <15 seconds with a returning customer. */
+const clampMinutes = (m: number) => Math.min(480, Math.max(15, Math.round(m)));
+
+/**
+ * Quick start: tap a free station → "Start timer". The station's default
+ * plan price is pre-filled and editable; customer details are optional and
+ * can be added later from the session screen.
+ */
 export default function NewSessionPage() {
   const router = useRouter();
   const params = useSearchParams();
   const toast = useToast();
-
-  // step 1: customer
-  const [query, setQuery] = useState('');
-  const [results, setResults] = useState<Customer[]>([]);
-  const [searching, setSearching] = useState(false);
-  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
-  const [newMode, setNewMode] = useState(false);
-  const [newName, setNewName] = useState('');
-  const [newMobile, setNewMobile] = useState('');
-  const [showResults, setShowResults] = useState(false);
-
-  // step 2: resource
   const settings = useSettings();
-  const { data: resData, reload: reloadResources } = useApi<{ resources: Resource[] }>('/api/admin/resources');
-  const resources = useMemo(() => resData?.resources ?? [], [resData]);
-  const [resourceId, setResourceId] = useState<string | null>(null);
+  const sym = settings.currency_symbol || '₹';
 
-  // step 3: start time
+  // ---- data
+  const { data: resData, reload: reloadResources } = useApi<{ resources: Resource[] }>('/api/admin/resources');
+  const { data: planData } = useApi<{ plans: PricingPlan[] }>('/api/admin/pricing/plans');
+  const { data: liveData, reload: reloadLive } = useApi<{ sessions: Session[] }>(
+    '/api/admin/sessions?status=live&limit=50'
+  );
+  const resources = useMemo(() => (resData?.resources ?? []).filter((r) => r.active), [resData]);
+  const plans = useMemo(() => planData?.plans ?? [], [planData]);
+  const liveByResource = useMemo(() => {
+    const m = new Map<string, Session>();
+    for (const s of liveData?.sessions ?? []) m.set(s.resource_id, s);
+    return m;
+  }, [liveData]);
+
+  const refetch = useDebouncedCallback(() => {
+    reloadResources();
+    reloadLive();
+  }, 400);
+  useRealtime('resources', refetch);
+  useRealtime('sessions', refetch);
+
+  // ---- selection
+  const [resourceId, setResourceId] = useState<string | null>(null);
+  const [planId, setPlanId] = useState<string | null>(null);
+  const [priceText, setPriceText] = useState('');
+
+  // ---- optional customer
+  const [name, setName] = useState('');
+  const [mobile, setMobile] = useState('');
+  const [customer, setCustomer] = useState<Customer | null>(null);
+  const [suggestions, setSuggestions] = useState<Customer[]>([]);
+  const [customerOpen, setCustomerOpen] = useState(false);
+
+  // ---- more options
+  const [moreOpen, setMoreOpen] = useState(false);
   const [startMode, setStartMode] = useState<StartMode>('now');
   const [customTime, setCustomTime] = useState('');
-
-  // step 4: plan
-  const { data: planData } = useApi<{ plans: PricingPlan[] }>('/api/admin/pricing/plans');
-  const plans = useMemo(() => planData?.plans ?? [], [planData]);
-  const [planId, setPlanId] = useState<string | null>(null);
   const [expectedMinutes, setExpectedMinutes] = useState<number | null>(null);
 
   const [starting, setStarting] = useState(false);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const refetchResources = useDebouncedCallback(reloadResources, 400);
-  useRealtime('resources', refetchResources);
-  useRealtime('sessions', refetchResources);
-
-  // waitlist / prefill via query params
+  // ---- hand-off params (?resourceId= / waitlist: customerId, durationMinutes)
   useEffect(() => {
-    const cid = params.get('customerId');
-    let cancelled = false;
-    if (cid) {
-      // only the id travels in the URL; fetch the customer's details
-      api
-        .get<{ customer: Customer }>(`/api/admin/customers/${encodeURIComponent(cid)}`)
-        .then((r) => {
-          if (!cancelled) setSelectedCustomer(r.customer);
-        })
-        .catch((e: any) => {
-          if (!cancelled) toast.error(`Could not load customer: ${e.message}`);
-        });
-    }
     const rid = params.get('resourceId');
     if (rid) setResourceId(rid);
-    const dur = params.get('durationMinutes');
-    if (dur) setExpectedMinutes(Number(dur));
+    const dur = Number(params.get('durationMinutes'));
+    if (dur > 0) setExpectedMinutes(clampMinutes(dur));
+    const cid = params.get('customerId');
+    if (!cid) return;
+    let cancelled = false;
+    setCustomerOpen(true);
+    api
+      .get<{ customer: Customer }>(`/api/admin/customers/${encodeURIComponent(cid)}`)
+      .then((r) => {
+        if (!cancelled) setCustomer(r.customer);
+      })
+      .catch((e: any) => {
+        if (!cancelled) toast.error(`Could not load customer: ${e.message}`);
+      });
     return () => {
       cancelled = true;
     };
   }, [params]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // debounced customer search
-  useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (query.trim().length < 2 || selectedCustomer) {
-      setResults([]);
-      return;
-    }
-    debounceRef.current = setTimeout(async () => {
-      setSearching(true);
-      try {
-        const res = await api.get<{ customers: Customer[] }>(
-          `/api/admin/customers?q=${encodeURIComponent(query.trim())}&limit=8`
-        );
-        setResults(res.customers);
-        setShowResults(true);
-      } catch (e: any) {
-        setResults([]);
-        toast.error(`Customer search failed: ${e.message}`);
-      } finally {
-        setSearching(false);
-      }
-    }, 250);
-  }, [query, selectedCustomer]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const resource = resources.find((r) => r.id === resourceId);
-  const resourcePlans = useMemo(
-    () => plans.filter((p) => p.active && p.resource_type === resource?.type),
-    [plans, resource]
-  );
+  const resource = resources.find((r) => r.id === resourceId) ?? null;
+  const resourceFree =
+    !!resource &&
+    resource.status === 'ACTIVE' &&
+    resource.current_status !== 'MAINTENANCE' &&
+    resource.current_status !== 'BUSY' &&
+    !liveByResource.has(resource.id);
+  const resourcePlans = useMemo(() => {
+    if (!resource) return [];
+    const own = plans.filter((p) => p.active && p.resource_type === resource.type);
+    const def = defaultPlanFor(resource, plans);
+    return def && !own.some((p) => p.id === def.id) ? [def, ...own] : own;
+  }, [plans, resource]);
   const plan = resourcePlans.find((p) => p.id === planId) ?? null;
 
-  // Relative starts ("in 5 min") are stored as an offset and resolved to an
-  // absolute time only at submit, so a slow form doesn't schedule in the past.
+  function applyPlan(p: PricingPlan | null) {
+    setPlanId(p?.id ?? null);
+    setPriceText(p ? String(p.price) : '');
+  }
+
+  function selectResource(r: Resource) {
+    setResourceId(r.id);
+    applyPlan(defaultPlanFor(r, plans));
+  }
+
+  // preselected station (query param) or plans arriving after a tap → fill default plan
+  useEffect(() => {
+    if (resource && !planId && plans.length) applyPlan(defaultPlanFor(resource, plans));
+  }, [resource, plans, planId]);
+
+  // ---- price
+  const parsedPrice = priceText.trim() === '' ? NaN : Number(priceText);
+  const priceValid = Number.isFinite(parsedPrice) && parsedPrice >= 0 && parsedPrice <= 100000;
+  const isCustom = !!plan && priceValid && Math.abs(parsedPrice - plan.price) > 0.0001;
+  const pricedPlan: PlanSnapshot | null =
+    plan && priceValid
+      ? { name: plan.name, billing_type: plan.billing_type, price: parsedPrice, duration_minutes: plan.duration_minutes }
+      : null;
+  const est = (min: number) =>
+    pricedPlan ? estimateBookingAmount(pricedPlan, min, settings.billing_mode, settings.min_billing_minutes) : 0;
+
+  // ---- start time
   const offsetMinutes = startMode === '+5' ? 5 : startMode === '+10' ? 10 : 0;
   const customDate = startMode === 'custom' && customTime ? new Date(customTime) : null;
   const isScheduled =
-    offsetMinutes > 0 || (!!customDate && !Number.isNaN(customDate.getTime()) && customDate.getTime() > Date.now() + 60_000);
-  // what the duration input shows IS the value that gets submitted
-  const effectiveMinutes = expectedMinutes ?? plan?.duration_minutes ?? 60;
-  const estimate = plan ? estimateBookingAmount(plan, effectiveMinutes) : null;
-  const sym = settings.currency_symbol || '₹';
-
-  const canStart =
-    (selectedCustomer || (newMode && newName.trim().length >= 2 && newMobile.trim().length >= 7)) &&
-    resourceId &&
-    planId &&
-    (!isScheduled || effectiveMinutes > 0);
+    offsetMinutes > 0 ||
+    (!!customDate && !Number.isNaN(customDate.getTime()) && customDate.getTime() > Date.now() + 60_000);
+  const scheduledMinutes = expectedMinutes ?? plan?.duration_minutes ?? 60;
 
   function resolveStartTime(): Date {
     const now = new Date();
@@ -136,282 +158,470 @@ export default function NewSessionPage() {
     return now;
   }
 
-  async function start() {
-    if (!resourceId || !planId) return;
+  // ---- existing-customer suggestions (optional, never required)
+  const searchRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (searchRef.current) clearTimeout(searchRef.current);
+    const digits = mobile.replace(/\D/g, '');
+    const q = digits.length >= 4 ? digits : name.trim().length >= 2 ? name.trim() : '';
+    if (!q || customer) {
+      setSuggestions([]);
+      return;
+    }
+    searchRef.current = setTimeout(async () => {
+      try {
+        const res = await api.get<{ customers: Customer[] }>(
+          `/api/admin/customers?q=${encodeURIComponent(q)}&limit=4`
+        );
+        setSuggestions(res.customers);
+      } catch {
+        setSuggestions([]);
+      }
+    }, 300);
+  }, [name, mobile, customer]);
+
+  const mobileHint = mobile.trim() && !looksLikeMobile(mobile) ? 'Looks short — check the number (you can fix it later)' : '';
+  const canStart = resourceFree && !!plan && priceValid && !starting;
+
+  async function start(e?: React.FormEvent) {
+    e?.preventDefault();
+    if (!resource || !resourceFree || !plan || !priceValid || starting) return;
     setStarting(true);
     try {
       const body: Record<string, unknown> = {
-        resourceId,
-        pricingPlanId: planId,
-        startTime: resolveStartTime().toISOString(),
-        expectedMinutes: isScheduled ? effectiveMinutes : expectedMinutes,
+        resourceId: resource.id,
+        pricingPlanId: plan.id,
       };
-      if (selectedCustomer) body.customerId = selectedCustomer.id;
-      else body.newCustomer = { name: newName.trim(), mobile: newMobile.trim() };
+      if (isCustom) body.customPrice = parsedPrice;
+      if (customer) body.customerId = customer.id;
+      else {
+        if (name.trim()) body.guestName = name.trim();
+        if (mobile.trim()) body.guestMobile = mobile.trim();
+      }
+      if (isScheduled) {
+        body.startTime = resolveStartTime().toISOString();
+        body.expectedMinutes = clampMinutes(scheduledMinutes);
+      } else if (expectedMinutes) {
+        body.expectedMinutes = clampMinutes(expectedMinutes);
+      }
 
       const res = await api.post<{ id: string }>('/api/admin/sessions', body);
-      toast.success(isScheduled ? 'Session scheduled' : 'Session started');
       invalidate('/api/admin/sessions');
       invalidate('/api/admin/dashboard');
       invalidate('/api/admin/resources');
+      toast.success(isScheduled ? 'Session scheduled' : 'Timer started');
       router.push(`/admin/sessions/${res.id}`);
-    } catch (e: any) {
-      toast.error(e.message);
-    } finally {
+      // keep the button busy until the route changes (no double starts)
+    } catch (err: any) {
+      toast.error(err.message);
       setStarting(false);
     }
   }
 
+  const loadingStations = !resData;
+
   return (
-    <div className="mx-auto max-w-3xl">
-      <PageHeader
-        title="New Session"
-        subtitle="Search the customer, pick a station and start — billing runs automatically."
-      />
+    <form className="mx-auto max-w-3xl pb-4" onSubmit={start}>
+      <PageHeader title="New session" subtitle="Tap a station, then Start timer. Customer details are optional." />
 
-      {/* STEP 1 — customer */}
-      <section className="glass mb-4 rounded-2xl p-5 shadow-card" aria-label="Customer">
-        <h2 className="mb-3 flex items-center gap-2 text-sm font-bold">
-          <StepNumber n={1} /> Customer
-        </h2>
-
-        {selectedCustomer ? (
-          <div className="flex items-center justify-between rounded-xl border border-primary/40 bg-primary/10 px-4 py-3">
-            <div>
-              <p className="font-bold">{selectedCustomer.name}</p>
-              <p className="text-sm text-muted">{selectedCustomer.mobile}</p>
-            </div>
-            <Button variant="ghost" size="sm" onClick={() => { setSelectedCustomer(null); setQuery(''); }}>
-              Change
-            </Button>
-          </div>
-        ) : newMode ? (
-          <div className="space-y-3">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Name" required>
-                <Input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Customer name" autoFocus />
-              </Field>
-              <Field label="Mobile number" required>
-                <Input value={newMobile} onChange={(e) => setNewMobile(e.target.value)} placeholder="9876543210" inputMode="tel" />
-              </Field>
-            </div>
-            <button className="text-xs font-bold text-secondary hover:underline" onClick={() => setNewMode(false)}>
-              ← Search existing customer instead
-            </button>
-          </div>
-        ) : (
-          <div className="relative">
-            <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" aria-hidden />
-            <Input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onFocus={() => setShowResults(true)}
-              placeholder="Search by name or mobile number…"
-              className="pl-10"
-              autoFocus
-              aria-label="Search customer"
-            />
-            {searching && <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted">…</span>}
-            {showResults && results.length > 0 && (
-              <ul className="absolute inset-x-0 top-full z-20 mt-2 max-h-72 overflow-y-auto rounded-xl border border-border bg-surface shadow-glow-sm">
-                {results.map((c) => (
-                  <li key={c.id}>
-                    <button
-                      className="flex w-full items-center justify-between px-4 py-3 text-left transition-colors hover:bg-surface-2"
-                      onClick={() => {
-                        setSelectedCustomer(c);
-                        setShowResults(false);
-                      }}
-                    >
-                      <span>
-                        <span className="block text-sm font-bold">{c.name}</span>
-                        <span className="block text-xs text-muted">{c.mobile}</span>
-                      </span>
-                      <Check className="h-4 w-4 text-primary" aria-hidden />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            {showResults && !searching && query.trim().length >= 2 && results.length === 0 && (
-              <div className="absolute inset-x-0 top-full z-20 mt-2 rounded-xl border border-border bg-surface p-4 text-center">
-                <p className="text-sm text-muted">No customer found.</p>
-                <Button size="sm" variant="secondary" className="mt-2" onClick={() => { setNewMode(true); setShowResults(false); }}>
-                  <UserPlus className="h-4 w-4" /> Create “{query.trim()}”
-                </Button>
-              </div>
-            )}
-            <button
-              className="mt-3 inline-flex items-center gap-1.5 text-xs font-bold text-secondary hover:underline"
-              onClick={() => setNewMode(true)}
-            >
-              <UserPlus className="h-3.5 w-3.5" /> New customer
-            </button>
-          </div>
-        )}
-      </section>
-
-      {/* STEP 2 — resource */}
-      <section className="glass mb-4 rounded-2xl p-5 shadow-card" aria-label="Resource">
-        <h2 className="mb-3 flex items-center gap-2 text-sm font-bold">
-          <StepNumber n={2} /> Resource
-        </h2>
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-          {resources.filter((r) => r.active).map((r) => {
-            const available = r.status === 'ACTIVE' && r.current_status !== 'BUSY' && r.current_status !== 'MAINTENANCE';
+      {/* 1 — stations */}
+      <section aria-label="Stations" className="mb-4">
+        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+          {loadingStations &&
+            Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="h-[104px] animate-pulse rounded-2xl border border-border bg-surface-2/60" />
+            ))}
+          {resources.map((r) => {
+            const live = liveByResource.get(r.id);
+            const maintenance = r.status !== 'ACTIVE' || r.current_status === 'MAINTENANCE';
+            const busy = !maintenance && (r.current_status === 'BUSY' || !!live);
             const selected = resourceId === r.id;
+            const def = defaultPlanFor(r, plans);
+            const statusText = maintenance ? 'Maintenance' : busy ? 'Busy' : r.current_status === 'RESERVED' ? 'Reserved soon' : 'Free';
+            const statusTone = maintenance ? 'text-muted' : busy ? 'text-danger' : r.current_status === 'RESERVED' ? 'text-warning' : 'text-success';
+
+            const inner = (
+              <>
+                <div className="flex items-start justify-between gap-2">
+                  <p className="truncate text-base font-extrabold">{r.name}</p>
+                  {selected && <Check className="h-5 w-5 shrink-0 text-primary" aria-hidden />}
+                </div>
+                <p className="truncate text-[11px] text-muted">{r.type.replace(/_/g, ' ')}</p>
+                <div className="mt-2 flex items-center justify-between gap-2">
+                  <span className={`text-[11px] font-extrabold uppercase tracking-wide ${statusTone}`}>
+                    <span className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-current align-middle" aria-hidden />
+                    {statusText}
+                  </span>
+                  {def && !busy && !maintenance && (
+                    <span className="truncate text-xs font-bold text-secondary">{rateLabel(def, sym)}</span>
+                  )}
+                </div>
+                {busy && (
+                  <p className="mt-1 truncate text-[11px] font-bold text-secondary">
+                    {live ? `${customerLabel(live)} · open timer →` : 'In use'}
+                  </p>
+                )}
+              </>
+            );
+
+            const base = 'block min-h-[104px] rounded-2xl border p-3.5 text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary';
+            if (busy && live) {
+              return (
+                <Link
+                  key={r.id}
+                  href={`/admin/sessions/${live.id}`}
+                  className={`${base} border-danger/30 bg-danger/5 hover:border-danger/50`}
+                  aria-label={`${r.name} is busy — open its live session`}
+                >
+                  {inner}
+                </Link>
+              );
+            }
             return (
               <button
                 key={r.id}
-                disabled={!available}
-                onClick={() => {
-                  setResourceId(r.id);
-                  setPlanId(null);
-                }}
-                className={`rounded-xl border p-3 text-left transition-all ${
+                type="button"
+                disabled={busy || maintenance}
+                onClick={() => selectResource(r)}
+                aria-pressed={selected}
+                className={`${base} ${
                   selected
                     ? 'border-primary bg-primary/15 shadow-glow-sm'
-                    : available
-                      ? 'border-border bg-surface-2 hover:border-primary/40'
-                      : 'cursor-not-allowed border-border bg-surface-2/50 opacity-50'
+                    : busy || maintenance
+                      ? 'cursor-not-allowed border-border bg-surface-2/50 opacity-50'
+                      : 'border-border bg-surface-2 hover:border-primary/40 active:scale-[0.98]'
                 }`}
-                aria-pressed={selected}
               >
-                <p className="truncate text-sm font-bold">{r.name}</p>
-                <p className="truncate text-[11px] text-muted">{r.type.replace(/_/g, ' ')}</p>
-                <p
-                  className={`mt-1 text-[10px] font-extrabold uppercase tracking-wide ${
-                    r.current_status === 'AVAILABLE'
-                      ? 'text-success'
-                      : r.current_status === 'BUSY'
-                        ? 'text-danger'
-                        : r.current_status === 'RESERVED'
-                          ? 'text-warning'
-                          : 'text-muted'
-                  }`}
-                >
-                  {r.current_status === 'BUSY' ? 'Busy' : r.current_status}
-                </p>
+                {inner}
               </button>
             );
           })}
         </div>
-      </section>
-
-      {/* STEP 3 — start time */}
-      <section className="glass mb-4 rounded-2xl p-5 shadow-card" aria-label="Start time">
-        <h2 className="mb-3 flex items-center gap-2 text-sm font-bold">
-          <StepNumber n={3} /> Start time
-        </h2>
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <TimeButton active={startMode === 'now'} onClick={() => setStartMode('now')} icon={<Zap className="h-4 w-4" />} label="Start now" />
-          <TimeButton active={startMode === '+5'} onClick={() => setStartMode('+5')} icon={<Clock className="h-4 w-4" />} label="In 5 min" />
-          <TimeButton active={startMode === '+10'} onClick={() => setStartMode('+10')} icon={<Clock className="h-4 w-4" />} label="In 10 min" />
-          <TimeButton active={startMode === 'custom'} onClick={() => { setStartMode('custom'); setCustomTime(toLocalInputValue(new Date())); }} icon={<CalendarClock className="h-4 w-4" />} label="Custom" />
-        </div>
-        {startMode === 'custom' && (
-          <div className="mt-3">
-            <Input
-              type="datetime-local"
-              value={customTime}
-              onChange={(e) => setCustomTime(e.target.value)}
-              aria-label="Custom start time"
-            />
-          </div>
-        )}
-        {isScheduled && (
-          <div className="mt-3 rounded-xl border border-secondary/30 bg-secondary/10 p-3">
-            <p className="text-xs font-semibold text-secondary">
-              Future start — the session will be SCHEDULED and starts billing automatically at the
-              scheduled time.
-            </p>
-            <div className="mt-2 flex items-center gap-2">
-                <label className="text-xs font-bold text-muted" htmlFor="expected-min">Expected duration (min):</label>
-                <input
-                  id="expected-min"
-                  type="number"
-                  min={15}
-                  max={480}
-                  step={15}
-                  value={effectiveMinutes || ''}
-                  onChange={(e) => setExpectedMinutes(e.target.value === '' ? 0 : Number(e.target.value))}
-                  className="input-base w-24"
-                />
-            </div>
-          </div>
-        )}
-      </section>
-
-      {/* STEP 4 — pricing plan */}
-      <section className="glass mb-4 rounded-2xl p-5 shadow-card" aria-label="Pricing">
-        <h2 className="mb-3 flex items-center gap-2 text-sm font-bold">
-          <StepNumber n={4} /> Pricing plan
-        </h2>
-        {resourcePlans.length === 0 ? (
-          <p className="text-sm text-muted">
-            No pricing plan for {resource?.type.replace(/_/g, ' ')}. Add one under Pricing first.
+        {!loadingStations && resources.length === 0 && (
+          <p className="glass rounded-2xl p-4 text-center text-sm text-muted">
+            No stations yet — add one under Resources.
           </p>
-        ) : (
-          <div className="grid gap-2 sm:grid-cols-2">
-            {resourcePlans.map((p) => (
-              <button
-                key={p.id}
-                onClick={() => {
-                  setPlanId(p.id);
-                  setExpectedMinutes(p.duration_minutes);
-                }}
-                className={`flex items-center justify-between rounded-xl border p-3 text-left transition-all ${
-                  planId === p.id
-                    ? 'border-primary bg-primary/15 shadow-glow-sm'
-                    : 'border-border bg-surface-2 hover:border-primary/40'
-                }`}
-                aria-pressed={planId === p.id}
-              >
-                <div>
-                  <p className="text-sm font-bold">{p.name}</p>
-                  <p className="text-[11px] text-muted">
-                    {p.billing_type.replace(/_/g, ' ')}
-                    {p.duration_minutes ? ` · ${p.duration_minutes} min` : ''}
-                  </p>
-                </div>
-                <span className="font-extrabold text-secondary">{formatMoney(p.price, sym)}</span>
-              </button>
-            ))}
-          </div>
         )}
       </section>
 
-      {/* summary + start */}
-      <div className="glass sticky bottom-20 z-30 rounded-2xl border-primary/30 p-4 shadow-glow sm:bottom-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="min-w-0 text-sm">
-            {selectedCustomer || newName ? (
-              <p className="truncate">
-                <Users className="mr-1 inline h-3.5 w-3.5 text-muted" aria-hidden />
-                <strong>{selectedCustomer?.name ?? newName}</strong>
-                {resource ? <> · {resource.name}</> : null}
-                {estimate ? <> · est. <strong>{formatMoney(estimate, sym)}</strong></> : null}
-              </p>
+      {/* 2 — price */}
+      {resource && (
+        <section className="glass mb-4 rounded-2xl p-4 shadow-card sm:p-5" aria-label="Price">
+          <div className="mb-3 flex items-center gap-2">
+            <Gamepad2 className="h-4 w-4 text-primary" aria-hidden />
+            <h2 className="text-sm font-bold">{resource.name} · price</h2>
+          </div>
+
+          {resourcePlans.length === 0 ? (
+            <p className="text-sm text-muted">
+              No active pricing plan for {resource.type.replace(/_/g, ' ')}. Add one under Pricing first.
+            </p>
+          ) : (
+            <>
+              {resourcePlans.length > 1 && (
+                <div className="mb-3 flex flex-wrap gap-2" role="radiogroup" aria-label="Pricing plan">
+                  {resourcePlans.map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={planId === p.id}
+                      onClick={() => applyPlan(p)}
+                      className={`min-h-[40px] rounded-full border px-3.5 text-xs font-bold transition-colors ${
+                        planId === p.id
+                          ? 'border-primary bg-primary/15 text-primary'
+                          : 'border-border bg-surface-2 text-muted hover:text-content'
+                      }`}
+                    >
+                      {p.name} · {rateLabel(p, sym)}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {plan && (
+                <>
+                  <label htmlFor="session-price" className="label-base">
+                    Price for this session
+                  </label>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                    <div className="relative w-40">
+                      <span className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-lg font-bold text-muted">
+                        {sym}
+                      </span>
+                      <Input
+                        id="session-price"
+                        type="number"
+                        inputMode="decimal"
+                        min={0}
+                        step="any"
+                        value={priceText}
+                        onChange={(e) => setPriceText(e.target.value)}
+                        onFocus={(e) => e.currentTarget.select()}
+                        invalid={!priceValid}
+                        className="h-12 pl-8 text-lg font-extrabold tabular-nums"
+                      />
+                    </div>
+                    <span className="text-sm font-semibold text-muted">
+                      {priceUnitLabel(plan.billing_type, plan.duration_minutes)}
+                    </span>
+                    {isCustom && (
+                      <span className="flex items-center gap-2">
+                        <CustomPriceBadge />
+                        <button
+                          type="button"
+                          onClick={() => setPriceText(String(plan.price))}
+                          className="inline-flex min-h-[32px] items-center gap-1 text-xs font-bold text-secondary hover:underline"
+                        >
+                          <RotateCcw className="h-3 w-3" aria-hidden /> reset to {formatMoney(plan.price, sym)}
+                        </button>
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-1 min-h-[16px] text-xs text-danger">{!priceValid ? 'Enter a price (0 or more)' : ''}</p>
+
+                  {pricedPlan && (
+                    <div className="mt-1 rounded-xl border border-border bg-surface-2/60 p-3">
+                      <p className="text-sm font-bold">
+                        <EstimateHeadline plan={pricedPlan} est={est} sym={sym} />
+                        <span className="font-normal text-muted">
+                          {' '}· {billingModeText(settings.billing_mode, settings.min_billing_minutes)}
+                        </span>
+                      </p>
+                      {(pricedPlan.billing_type === 'HOURLY' || pricedPlan.billing_type === 'PER_MINUTE') && (
+                        <p className="mt-1 text-xs tabular-nums text-muted">
+                          {[30, 90, 120].map((m, i) => (
+                            <span key={m}>
+                              {i > 0 && ' · '}
+                              {formatMinutes(m)} {formatMoney(est(m), sym)}
+                            </span>
+                          ))}
+                          {expectedMinutes && ![30, 60, 90, 120].includes(expectedMinutes) && (
+                            <> · {formatMinutes(expectedMinutes)} {formatMoney(est(expectedMinutes), sym)}</>
+                          )}
+                        </p>
+                      )}
+                      <p className="mt-1.5 flex items-start gap-1.5 text-[11px] text-muted">
+                        <Info className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
+                        <span>
+                          {billingModeExplainer(settings.billing_mode)}
+                          {settings.min_billing_minutes > 0 && ` Minimum charge: ${settings.min_billing_minutes} min.`}
+                        </span>
+                      </p>
+                    </div>
+                  )}
+                </>
+              )}
+            </>
+          )}
+        </section>
+      )}
+
+      {/* 3 — customer (optional) */}
+      <section className="glass mb-4 rounded-2xl shadow-card" aria-label="Customer (optional)">
+        <button
+          type="button"
+          onClick={() => setCustomerOpen((o) => !o)}
+          aria-expanded={customerOpen}
+          className="flex min-h-[52px] w-full items-center justify-between gap-2 px-4 text-left sm:px-5"
+        >
+          <span className="flex items-center gap-2 text-sm font-bold">
+            <User className="h-4 w-4 text-muted" aria-hidden />
+            Customer <span className="font-normal text-muted">(optional — add later)</span>
+          </span>
+          <span className="flex min-w-0 items-center gap-2">
+            {!customerOpen && (customer || name) && (
+              <span className="truncate text-xs font-semibold text-secondary">{customer?.name ?? name}</span>
+            )}
+            <ChevronDown className={`h-4 w-4 shrink-0 text-muted transition-transform ${customerOpen ? 'rotate-180' : ''}`} aria-hidden />
+          </span>
+        </button>
+        {customerOpen && (
+          <div className="border-t border-border px-4 pb-4 pt-3 sm:px-5">
+            {customer ? (
+              <div className="flex items-center justify-between gap-3 rounded-xl border border-primary/40 bg-primary/10 px-4 py-3">
+                <div className="min-w-0">
+                  <p className="truncate font-bold">{customer.name}</p>
+                  <p className="truncate text-sm text-muted">{customer.mobile}</p>
+                </div>
+                <Button type="button" variant="ghost" size="sm" onClick={() => setCustomer(null)} aria-label="Remove customer">
+                  <X className="h-4 w-4" /> Remove
+                </Button>
+              </div>
             ) : (
-              <p className="text-muted">Select a customer, resource and plan to continue</p>
+              <>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <label htmlFor="guest-name" className="label-base">Name</label>
+                    <Input
+                      id="guest-name"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      placeholder="Walk-in"
+                      autoComplete="off"
+                      maxLength={120}
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="guest-mobile" className="label-base">Mobile</label>
+                    <div className="relative">
+                      <Phone className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" aria-hidden />
+                      <Input
+                        id="guest-mobile"
+                        value={mobile}
+                        onChange={(e) => setMobile(e.target.value)}
+                        placeholder="98765 43210"
+                        inputMode="tel"
+                        autoComplete="off"
+                        className="pl-10"
+                        maxLength={20}
+                        aria-describedby="guest-mobile-hint"
+                      />
+                    </div>
+                    <p id="guest-mobile-hint" className="mt-1 min-h-[16px] text-xs text-warning">{mobileHint}</p>
+                  </div>
+                </div>
+                {suggestions.length > 0 && (
+                  <div className="mt-1">
+                    <p className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-muted">Existing customers</p>
+                    <ul className="flex flex-wrap gap-2">
+                      {suggestions.map((c) => (
+                        <li key={c.id}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCustomer(c);
+                              setSuggestions([]);
+                            }}
+                            className="min-h-[40px] rounded-xl border border-border bg-surface-2 px-3 text-left text-xs hover:border-primary/40"
+                          >
+                            <span className="font-bold">{c.name}</span> <span className="text-muted">{c.mobile}</span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </>
             )}
           </div>
-          <Button size="lg" loading={starting} disabled={!canStart} onClick={start} className="shrink-0">
-            <Rocket className="h-4 w-4" />
-            {isScheduled ? 'Schedule Session' : 'Start Session'}
+        )}
+      </section>
+
+      {/* 4 — more options (schedule) */}
+      <section className="glass mb-4 rounded-2xl shadow-card" aria-label="More options">
+        <button
+          type="button"
+          onClick={() => setMoreOpen((o) => !o)}
+          aria-expanded={moreOpen}
+          className="flex min-h-[52px] w-full items-center justify-between gap-2 px-4 text-left sm:px-5"
+        >
+          <span className="flex items-center gap-2 text-sm font-bold">
+            <CalendarClock className="h-4 w-4 text-muted" aria-hidden />
+            More options <span className="font-normal text-muted">(start later · expected time)</span>
+          </span>
+          <ChevronDown className={`h-4 w-4 shrink-0 text-muted transition-transform ${moreOpen ? 'rotate-180' : ''}`} aria-hidden />
+        </button>
+        {moreOpen && (
+          <div className="space-y-3 border-t border-border px-4 pb-4 pt-3 sm:px-5">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" role="radiogroup" aria-label="Start time">
+              <TimeButton active={startMode === 'now'} onClick={() => setStartMode('now')} icon={<Zap className="h-4 w-4" />} label="Now" />
+              <TimeButton active={startMode === '+5'} onClick={() => setStartMode('+5')} icon={<Clock className="h-4 w-4" />} label="In 5 min" />
+              <TimeButton active={startMode === '+10'} onClick={() => setStartMode('+10')} icon={<Clock className="h-4 w-4" />} label="In 10 min" />
+              <TimeButton
+                active={startMode === 'custom'}
+                onClick={() => {
+                  setStartMode('custom');
+                  if (!customTime) setCustomTime(toLocalInputValue(new Date(Date.now() + 30 * 60000)));
+                }}
+                icon={<CalendarClock className="h-4 w-4" />}
+                label="Pick time"
+              />
+            </div>
+            {startMode === 'custom' && (
+              <Input
+                type="datetime-local"
+                value={customTime}
+                onChange={(e) => setCustomTime(e.target.value)}
+                aria-label="Start time"
+              />
+            )}
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="text-xs font-bold text-muted" htmlFor="expected-min">
+                Expected duration (min){isScheduled ? '' : ' — optional'}
+              </label>
+              <input
+                id="expected-min"
+                type="number"
+                inputMode="numeric"
+                min={15}
+                max={480}
+                step={15}
+                value={isScheduled ? scheduledMinutes : expectedMinutes ?? ''}
+                onChange={(e) => setExpectedMinutes(e.target.value === '' ? null : Number(e.target.value))}
+                placeholder="—"
+                className="input-base w-24"
+              />
+              {pricedPlan && (isScheduled || expectedMinutes) ? (
+                <span className="text-xs text-muted">
+                  ≈ {formatMoney(est(isScheduled ? scheduledMinutes : expectedMinutes ?? 0), sym)}
+                </span>
+              ) : null}
+            </div>
+            {isScheduled && (
+              <p className="rounded-xl border border-secondary/30 bg-secondary/10 p-3 text-xs font-semibold text-secondary">
+                The session is SCHEDULED and starts billing automatically at the chosen time.
+              </p>
+            )}
+          </div>
+        )}
+      </section>
+
+      {/* sticky start bar */}
+      <div className="glass sticky bottom-20 z-30 rounded-2xl border-primary/30 p-3 shadow-glow sm:bottom-4 sm:p-4">
+        <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
+          <p className="min-h-[20px] truncate text-sm">
+            {resource && plan && pricedPlan ? (
+              <>
+                <strong>{resource.name}</strong>
+                <span className="text-muted"> · {rateLabel(pricedPlan, sym)}</span>
+                {isCustom && <span className="text-warning"> · custom</span>}
+                <span className="text-muted"> · {customer?.name || name.trim() || 'Walk-in'}</span>
+              </>
+            ) : (
+              <span className="text-muted">
+                {resource && !resourceFree ? `${resource.name} is not free — pick another station` : resource ? 'Set a price to continue' : 'Pick a free station'}
+              </span>
+            )}
+          </p>
+          <Button type="submit" size="xl" loading={starting} disabled={!canStart} className="w-full shrink-0 sm:w-auto">
+            <Timer className="h-5 w-5" />
+            {isScheduled ? 'Schedule session' : 'Start timer'}
           </Button>
         </div>
       </div>
-    </div>
+    </form>
   );
 }
 
-function StepNumber({ n }: { n: number }) {
-  return (
-    <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/15 text-xs font-extrabold text-primary">
-      {n}
-    </span>
-  );
+function EstimateHeadline({ plan, est, sym }: { plan: PlanSnapshot; est: (m: number) => number; sym: string }) {
+  switch (plan.billing_type) {
+    case 'HOURLY':
+    case 'PER_MINUTE':
+      return <>1 hr = {formatMoney(est(60), sym)}</>;
+    case 'PACKAGE':
+      return plan.duration_minutes ? (
+        <>
+          {formatMinutes(plan.duration_minutes)} = {formatMoney(est(plan.duration_minutes), sym)}
+          <span className="font-normal text-muted"> · extra time pro-rata</span>
+        </>
+      ) : (
+        <>Package {formatMoney(plan.price, sym)}</>
+      );
+    case 'FIXED':
+    default:
+      return <>Flat {formatMoney(plan.price, sym)} for the session</>;
+  }
 }
 
 function TimeButton({
@@ -425,11 +635,12 @@ function TimeButton({
   return (
     <button
       type="button"
+      role="radio"
+      aria-checked={active}
       onClick={onClick}
-      className={`flex flex-col items-center gap-1 rounded-xl border px-3 py-3 text-xs font-bold transition-all ${
+      className={`flex min-h-[56px] flex-col items-center justify-center gap-1 rounded-xl border px-3 py-2 text-xs font-bold transition-all ${
         active ? 'border-primary bg-primary/15 text-primary shadow-glow-sm' : 'border-border bg-surface-2 text-muted hover:text-content'
       }`}
-      aria-pressed={active}
     >
       {icon}
       {label}

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, jsonError, friendlyError, audit } from '@/lib/supabase/api';
-import { setDiscountSchema } from '@/lib/validations/schemas';
+import { setDiscountSchema, sessionPriceSchema, sessionCustomerSchema } from '@/lib/validations/schemas';
 import { mapSession, mapSessionItem, mapSettings, mapPricingRule } from '@/lib/mappers';
 import { calculateSessionBreakdown } from '@/lib/billing/engine';
 
@@ -127,6 +127,29 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       await audit(admin, userId, 'session.discount_set', 'session', params.id, {
         discountType: type,
         discountValue: type ? value : 0,
+      });
+    } else if (action === 'rate' || action === 'price') {
+      const parsed = sessionPriceSchema.safeParse({ price: Number(body.price) });
+      if (!parsed.success) return jsonError(parsed.error.issues[0]?.message ?? 'Invalid price');
+      const { error } = await admin.rpc('admin_set_session_price', {
+        p_session_id: params.id,
+        p_price: parsed.data.price,
+      });
+      if (error) return jsonError(friendlyError(error), 400);
+      await audit(admin, userId, 'session.price_changed', 'session', params.id, { price: parsed.data.price });
+    } else if (action === 'customer') {
+      const parsed = sessionCustomerSchema.safeParse({ name: body.name ?? null, mobile: body.mobile ?? null });
+      if (!parsed.success) return jsonError(parsed.error.issues[0]?.message ?? 'Invalid customer details');
+      const { error } = await admin.rpc('admin_set_session_customer', {
+        p_session_id: params.id,
+        p_name: parsed.data.name,
+        p_mobile: parsed.data.mobile,
+        p_acting_user: userId,
+      });
+      if (error) return jsonError(friendlyError(error), 400);
+      await audit(admin, userId, 'session.customer_set', 'session', params.id, {
+        name: parsed.data.name,
+        hasMobile: !!parsed.data.mobile,
       });
     } else if (action === 'notes') {
       const notes = String(body.notes ?? '').slice(0, 500);

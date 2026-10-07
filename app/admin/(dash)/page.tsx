@@ -11,6 +11,7 @@ import { StatsSkeleton, CardGridSkeleton } from '@/components/ui/skeleton';
 import { StatusBadge } from '@/components/ui/badge';
 import { SessionCard } from '@/components/admin/session-card';
 import { formatMoney, formatClock, formatDate } from '@/lib/billing/format';
+import { customerLabel } from '@/components/admin/pricing-display';
 import type {
   Booking, CafeSettings, DashboardStats, PricingRule, Resource,
   Session, SessionItem, WaitlistEntry,
@@ -124,7 +125,11 @@ export default function DashboardPage() {
         <h2 className="mb-3 text-sm font-bold uppercase tracking-wider text-muted">Live resources</h2>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {resources.filter((r) => r.active).map((r) => (
-            <ResourceMiniCard key={r.id} resource={r} sym={sym} />
+            <ResourceMiniCard
+              key={r.id}
+              resource={r}
+              liveSession={sessions.find((s) => s.resource_id === r.id) ?? null}
+            />
           ))}
         </div>
       </section>
@@ -179,7 +184,7 @@ export default function DashboardPage() {
                       {w.position}
                     </span>
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-bold">{w.customer_name}</p>
+                      <p className="truncate text-sm font-bold">{w.customer_name || 'Walk-in'}</p>
                       <p className="truncate text-xs text-muted">
                         {w.resource_name ?? w.resource_type?.replace(/_/g, ' ') ?? 'Any resource'}
                         {w.requested_duration_minutes ? ` · ${w.requested_duration_minutes} min` : ''}
@@ -212,7 +217,7 @@ export default function DashboardPage() {
                   <li key={b.id} className="flex items-center gap-3 px-4 py-3">
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-bold">
-                        {b.customer_name}{' '}
+                        {b.customer_name || 'Walk-in'}{' '}
                         <span className="font-normal text-muted">· {b.resource_name}</span>
                       </p>
                       <p className="text-xs text-muted">
@@ -256,9 +261,7 @@ export default function DashboardPage() {
   );
 }
 
-function ResourceMiniCard({ resource, sym }: { resource: Resource; sym: string }) {
-  const session = null; // detailed info lives on session cards
-  void session;
+function ResourceMiniCard({ resource, liveSession }: { resource: Resource; liveSession: Session | null }) {
   const tone =
     resource.current_status === 'AVAILABLE'
       ? 'border-success/30'
@@ -267,8 +270,16 @@ function ResourceMiniCard({ resource, sym }: { resource: Resource; sym: string }
         : resource.current_status === 'RESERVED'
           ? 'border-warning/30'
           : 'border-border';
-  return (
-    <div className={`glass rounded-2xl border-l-4 p-4 shadow-card ${tone}`}>
+  const free =
+    resource.status === 'ACTIVE' && !liveSession &&
+    resource.current_status !== 'BUSY' && resource.current_status !== 'MAINTENANCE';
+  const href = liveSession
+    ? `/admin/sessions/${liveSession.id}`
+    : free
+      ? `/admin/sessions/new?resourceId=${resource.id}`
+      : null;
+  const body = (
+    <>
       <div className="flex items-center justify-between gap-2">
         <p className="truncate text-sm font-extrabold">{resource.name}</p>
         <StatusBadge status={resource.current_status} />
@@ -277,7 +288,19 @@ function ResourceMiniCard({ resource, sym }: { resource: Resource; sym: string }
       {resource.status === 'MAINTENANCE' && (
         <p className="mt-2 text-xs font-semibold text-warning">Under maintenance</p>
       )}
-      <span className="sr-only">{sym}</span>
-    </div>
+      {liveSession ? (
+        <p className="mt-2 truncate text-xs font-bold text-secondary">{customerLabel(liveSession)} · open timer →</p>
+      ) : free ? (
+        <p className="mt-2 text-xs font-bold text-primary">Start timer →</p>
+      ) : null}
+    </>
+  );
+  const cls = `glass block rounded-2xl border-l-4 p-4 shadow-card ${tone}`;
+  return href ? (
+    <Link href={href} className={`${cls} transition-shadow hover:shadow-glow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary`}>
+      {body}
+    </Link>
+  ) : (
+    <div className={cls}>{body}</div>
   );
 }

@@ -6,7 +6,7 @@
 import type {
   Booking, CafeSettings, Customer, Invoice, InvoiceItem, MenuItem, Payment,
   PricingPlan, PricingRule, Profile, Resource, ServiceItem, Session,
-  SessionItem, WaitlistEntry,
+  SessionItem, WaitlistEntry, LedgerEntry,
 } from '@/types';
 import { num } from '@/lib/billing/format';
 
@@ -56,6 +56,11 @@ export function mapServiceItem(r: any): ServiceItem {
 export function mapSession(r: any): Session {
   return {
     ...r,
+    guest_name: r.guest_name ?? null,
+    guest_mobile: r.guest_mobile ?? null,
+    // linked customer first, then the typed walk-in details; null = "Walk-in"
+    customer_name: r.customer_name ?? r.guest_name ?? null,
+    customer_mobile: r.customer_mobile ?? r.guest_mobile ?? null,
     total_paused_seconds: r.total_paused_seconds ?? 0,
     pricing_plan_snapshot: r.pricing_plan_snapshot ?? {},
     gaming_amount: r.gaming_amount === null ? null : num(r.gaming_amount),
@@ -114,5 +119,20 @@ export function mapSettings(r: any): CafeSettings {
   return {
     ...r,
     tax_rate: r.tax_rate === null ? null : num(r.tax_rate),
+  };
+}
+
+export function mapLedgerEntry(r: any): LedgerEntry {
+  return {
+    id: r.id,
+    entry_type: r.entry_type,
+    category: r.category,
+    amount: num(r.amount),
+    entry_date: r.entry_date,
+    payment_method: r.payment_method ?? null,
+    description: r.description ?? null,
+    created_by: r.created_by ?? null,
+    created_by_name: r.created_by_name ?? null,
+    created_at: r.created_at,
   };
 }

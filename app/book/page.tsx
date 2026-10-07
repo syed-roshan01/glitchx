@@ -1,5 +1,6 @@
 'use client';
 
+import { roundBillableMinutes } from '@/lib/billing/engine';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
@@ -220,8 +221,14 @@ export default function BookPage() {
     };
   }, [resourceId, duration, estimateKey]);
 
-  const localEstimate =
-    resource?.hourly_rate ? Math.round(((resource.hourly_rate / 60) * duration) * 100) / 100 : null;
+  // instant fallback until the server estimate arrives — same rounding as the bill
+  const localEstimate = resource?.hourly_rate
+    ? Math.round(
+        ((resource.hourly_rate / 60) *
+          roundBillableMinutes(duration * 60, settings?.billing_mode ?? 'EXACT_MINUTES', settings?.min_billing_minutes ?? 0)) *
+          100
+      ) / 100
+    : null;
   const price = (estimateKey ? estimates[estimateKey] : null) ?? localEstimate;
   const priceSym = resource?.currency_symbol || sym;
 

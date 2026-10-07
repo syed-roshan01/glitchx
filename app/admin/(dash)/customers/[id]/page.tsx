@@ -6,7 +6,6 @@ import { useApi } from '@/lib/use-api';
 import { useSettings } from '@/components/admin/admin-context';
 import { PageHeader, StatCard, EmptyState } from '@/components/ui/misc';
 import { StatusBadge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
 import { formatMoney, formatDateTime, formatDuration, formatDate } from '@/lib/billing/format';
 import type { Customer, CustomerStats, Invoice, Session } from '@/types';
 import { ArrowLeft, Gamepad2, IndianRupee, CalendarDays, Star, Receipt } from 'lucide-react';
@@ -61,7 +60,10 @@ export default function CustomerDetailPage() {
         </Link>
       </div>
 
-      <PageHeader title={customer.name} subtitle={`${customer.mobile}${customer.email ? ` · ${customer.email}` : ''}`} />
+      <PageHeader
+        title={customer.name || 'Walk-in'}
+        subtitle={[customer.mobile, customer.email].filter(Boolean).join(' · ') || undefined}
+      />
 
       <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCard label="Total sessions" value={stats.total_sessions} icon={<Gamepad2 className="h-4 w-4" />} />
@@ -84,7 +86,9 @@ export default function CustomerDetailPage() {
               {sessions.slice(0, 12).map((s) => (
                 <li key={s.id} className="flex items-center gap-3 px-4 py-3">
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-bold">{s.resource_name}</p>
+                    <Link href={`/admin/sessions/${s.id}`} className="block truncate text-sm font-bold hover:underline">
+                      {s.resource_name ?? 'Session'}
+                    </Link>
                     <p className="text-xs text-muted">
                       {formatDateTime(s.actual_start_time ?? s.created_at, settings.timezone)}
                       {s.duration_seconds ? ` · ${formatDuration(s.duration_seconds)}` : ''}
@@ -127,10 +131,11 @@ export default function CustomerDetailPage() {
       </div>
 
       <div className="mt-6 text-center">
-        <Link href={`/admin/sessions/new?customerId=${customer.id}&name=${encodeURIComponent(customer.name)}&mobile=${encodeURIComponent(customer.mobile)}`}>
-          <Button>
-            <Gamepad2 className="h-4 w-4" /> Start session for {customer.name.split(' ')[0]}
-          </Button>
+        <Link
+          href={`/admin/sessions/new?customerId=${encodeURIComponent(customer.id)}`}
+          className="inline-flex h-12 items-center gap-2 rounded-xl bg-primary px-5 text-base font-semibold text-white shadow-glow-sm"
+        >
+          <Gamepad2 className="h-4 w-4" /> Start session for {(customer.name || 'customer').split(' ')[0]}
         </Link>
       </div>
     </div>

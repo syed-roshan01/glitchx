@@ -171,6 +171,27 @@ DB exclusion constraints; invoice prices snapshotted (immutable history).
     concluding a migration didn't run.
   - User has customized live pricing (Pool ₹200/hr) → admin account is in active use.
 
+- **2026-10-08 (session 5):** Owner requests.
+  - Quick-start sessions: /admin/sessions/new = station grid → editable pre-filled price
+    (plan price, e.g. PS5 150 / Pool 200) → Start timer. Customer name/mobile optional;
+    addable later on the session page, end-session modal, even after invoicing
+    (`admin_set_session_customer` also updates the invoice). `sessions.customer_id`
+    nullable + `guest_name`/`guest_mobile`; invoices show "Walk-in".
+  - Custom per-session price (`p_custom_price`, snapshot `custom`/`base_price`, peak rules
+    never override it) + change mid-session (`admin_set_session_price`).
+  - "₹140 instead of ₹150" bug: stored bills were always right (ROUND_UP_15); estimates
+    (new-session page, booking fallback, SQL `estimate_booking_amount`) used exact
+    minutes (56 min × ₹2.50 = ₹140). All estimates now apply the cafe rounding policy.
+    Also fixed: booking check-in picked the CHEAPEST plan of the type (pool → ₹120/30-min
+    package) instead of the station's default plan. Mobile lookup ignores formatting.
+  - Invoices: PDF (lib/invoice-pdf.ts, jspdf, A4 + 80mm) shared as a FILE via Web Share
+    (WhatsApp on phones) or downloaded; admin-only delete (cascades lines + payments).
+  - Income & Expenses: `ledger_entries` table, /api/admin/ledger, /admin/finance
+    (ADMIN/MANAGER): session income from payments + manual income − expenses = net.
+  - Migration 00015 (`00015_quick_sessions_pricing_ledger.sql`). DB suite: 54 checks.
+  - Note: DSH Desktop also runs `scripts/dev-server.cjs` in this workspace — it rewrites
+    `.next` in dev mode; don't run `next start` from the same folder while it runs.
+
 ## 9. Known issues / pending
 
 1. ~~Apply 00014 to live Supabase~~ **DONE — verified applied 2026-10-06** (session 4

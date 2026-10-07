@@ -207,6 +207,43 @@ describe('estimateBookingAmount', () => {
     money(estimateBookingAmount(pkg180, 120), 180);
     money(estimateBookingAmount(pkg180, 150), 225);
   });
+
+  it('applies the cafe rounding policy like the final bill (the ₹140 bug)', () => {
+    const ps5: PlanSnapshot = { name: 'PS5 Hourly', billing_type: 'HOURLY', price: 150, duration_minutes: null };
+    // exact minutes: 56 min × ₹2.50 = ₹140 — what the old estimate showed
+    money(estimateBookingAmount(ps5, 56), 140);
+    // ROUND_UP_15 (cafe setting): 56 min bills as 60 min = ₹150, same as the timer
+    money(estimateBookingAmount(ps5, 56, 'ROUND_UP_15'), 150);
+    money(estimateBookingAmount(ps5, 61, 'ROUND_UP_15'), 187.5);
+    const timerBill = calculateSessionBreakdown({
+      plan: ps5,
+      billingMode: 'ROUND_UP_15',
+      resourceId: 'r',
+      resourceType: 'PLAYSTATION',
+      timing: { actual_start_time: '2026-10-03T20:00:00Z', paused_at: null, total_paused_seconds: 0 },
+      endAt: new Date('2026-10-03T20:56:00Z'),
+    });
+    money(timerBill.gamingAmount, estimateBookingAmount(ps5, 56, 'ROUND_UP_15'));
+  });
+});
+
+describe('custom session price', () => {
+  const peak: RateRule = {
+    id: 'peak', name: 'Peak', resource_id: null, resource_type: null, days_of_week: [],
+    start_time: '00:00:00', end_time: '23:59:00', price: 500, priority: 0,
+  };
+  const ctx = { resourceId: 'r', resourceType: 'PLAYSTATION', startTimestamp: '2026-10-03T20:00:00Z' };
+
+  it('peak rules override the catalog price', () => {
+    const plan: PlanSnapshot = { name: 'PS5', billing_type: 'HOURLY', price: 150, duration_minutes: null };
+    money(computeGamingCharge(plan, [peak], ctx, 60).amount, 500);
+  });
+
+  it('a staff-entered custom price is never overridden by peak rules', () => {
+    const plan: PlanSnapshot = { name: 'PS5', billing_type: 'HOURLY', price: 120, duration_minutes: null, custom: true, base_price: 150 };
+    money(computeGamingCharge(plan, [peak], ctx, 60).amount, 120);
+    money(computeGamingCharge(plan, [peak], ctx, 90).amount, 180);
+  });
 });
 
 describe('calculateSessionBreakdown (end-to-end bill)', () => {

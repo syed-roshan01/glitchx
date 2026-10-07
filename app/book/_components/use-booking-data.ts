@@ -9,7 +9,7 @@ import { DAY } from './tz';
 
 const POLL_MS = 30_000;
 const SETTINGS_COLUMNS =
-  'cafe_name, phone, address, timezone, currency_symbol, allow_public_bookings, waitlist_enabled, booking_max_days_ahead';
+  'cafe_name, phone, address, timezone, currency_symbol, allow_public_bookings, waitlist_enabled, booking_max_days_ahead, billing_mode, min_billing_minutes';
 
 export interface BookingData {
   settings: PublicSettings | null;

@@ -10,6 +10,7 @@ import { ListSkeleton } from '@/components/ui/skeleton';
 import { StatusBadge } from '@/components/ui/badge';
 import { SessionCard } from '@/components/admin/session-card';
 import { formatMoney, formatDateTime, formatDuration } from '@/lib/billing/format';
+import { CustomPriceBadge, customerLabel } from '@/components/admin/pricing-display';
 import type { CafeSettings, PricingRule, Session, SessionItem } from '@/types';
 import { Plus, Gamepad2, Clock3, CheckCircle2 } from 'lucide-react';
 
@@ -159,7 +160,10 @@ function SessionsTable({ sessions, settings }: { sessions: Session[]; settings: 
         <tbody className="divide-y divide-border">
           {sessions.map((s) => (
             <tr key={s.id} className="transition-colors hover:bg-surface-2/50">
-              <td className="px-4 py-3 font-semibold">{s.customer_name}</td>
+              <td className="px-4 py-3">
+                <p className={`font-semibold ${customerLabel(s) === 'Walk-in' ? 'text-muted' : ''}`}>{customerLabel(s)}</p>
+                {s.pricing_plan_snapshot?.custom && <CustomPriceBadge className="mt-0.5" />}
+              </td>
               <td className="px-4 py-3 text-muted">{s.resource_name}</td>
               <td className="px-4 py-3 text-muted">
                 {formatDateTime(s.actual_start_time ?? s.scheduled_start_time, settings.timezone)}
@@ -167,7 +171,7 @@ function SessionsTable({ sessions, settings }: { sessions: Session[]; settings: 
               <td className="px-4 py-3 font-mono tabular-nums text-muted">
                 {s.duration_seconds ? formatDuration(s.duration_seconds) : '—'}
               </td>
-              <td className="px-4 py-3 font-bold tabular-nums">{s.total_amount ? formatMoney(s.total_amount, sym) : '—'}</td>
+              <td className="px-4 py-3 font-bold tabular-nums">{s.total_amount != null ? formatMoney(s.total_amount, sym) : '—'}</td>
               <td className="px-4 py-3">
                 <StatusBadge status={s.status} />
               </td>

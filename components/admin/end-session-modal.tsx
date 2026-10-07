@@ -9,8 +9,9 @@ import { api } from '@/lib/api-client';
 import { useNow } from '@/hooks/use-now';
 import { calculateSessionBreakdown } from '@/lib/billing/engine';
 import { formatMoney, formatDuration, formatClock } from '@/lib/billing/format';
+import { customerLabel, customerMobile, looksLikeMobile, rateLabel, billingModeText, CustomPriceBadge } from '@/components/admin/pricing-display';
 import type { CafeSettings, PricingRule, Session, SessionItem } from '@/types';
-import { Banknote, Smartphone, CreditCard, Wallet, Percent, IndianRupee } from 'lucide-react';
+import { Banknote, Smartphone, CreditCard, Wallet, Percent, IndianRupee, User, Phone } from 'lucide-react';
 
 /** End-session confirmation with the live final bill, discount and
  *  payment method. Amounts come from the billing engine; the server
@@ -38,6 +39,17 @@ export function EndSessionModal({
   const [discountValue, setDiscountValue] = useState<number>(session.discount_value ?? 0);
   const [paymentMethod, setPaymentMethod] = useState<'CASH' | 'UPI' | 'CARD' | 'OTHER' | null>('CASH');
   const [busy, setBusy] = useState(false);
+  const savedName = (session.customer_name ?? session.guest_name ?? '').trim();
+  const savedMobile = customerMobile(session) ?? '';
+  const [name, setName] = useState(savedName);
+  const [mobile, setMobile] = useState(savedMobile);
+
+  // prefill customer details from the session every time the modal opens
+  useEffect(() => {
+    if (!open) return;
+    setName(savedName);
+    setMobile(savedMobile);
+  }, [open, savedName, savedMobile]);
 
   // Re-sync with the session's saved discount every time the modal opens
   // (or the saved discount changes) so the shown total matches the invoice.
@@ -90,6 +102,10 @@ export function EndSessionModal({
             ? { discountType, discountValue: Number(discountValue) }
             : { discountType: 'FIXED' as const, discountValue: 0 }),
           paymentMethod,
+          // optional — only sent when staff changed them here
+          ...(name.trim() !== savedName || mobile.trim() !== savedMobile
+            ? { customerName: name.trim() || null, customerMobile: mobile.trim() || null }
+            : {}),
         }
       );
       toast.success(`Invoice ${res.invoiceNumber} generated`);
@@ -143,7 +159,7 @@ export function EndSessionModal({
           <div className="rounded-xl border border-border bg-surface-2 p-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-bold">{session.customer_name}</p>
+                <p className="text-sm font-bold">{name.trim() || customerLabel(session)}</p>
                 <p className="text-xs text-muted">{session.resource_name}</p>
               </div>
               <div className="text-right">
@@ -160,6 +176,13 @@ export function EndSessionModal({
           {/* bill lines */}
           <div className="space-y-1.5 text-sm">
             <Row label={`Gaming (${breakdown.billableMinutes} min${settings.billing_mode !== 'EXACT_MINUTES' ? ', rounded' : ''})`} value={formatMoney(breakdown.gamingAmount, sym)} />
+            <p className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
+              {breakdown.ruleApplied
+                ? `${formatMoney(breakdown.ruleApplied.price, sym)}/hr (${breakdown.ruleApplied.name})`
+                : rateLabel(session.pricing_plan_snapshot, sym)}
+              {session.pricing_plan_snapshot.custom && <CustomPriceBadge />}
+              <span>· {billingModeText(settings.billing_mode, settings.min_billing_minutes)}</span>
+            </p>
             {breakdown.itemAmount > 0 && <Row label="Food & drinks" value={formatMoney(breakdown.itemAmount, sym)} />}
             {breakdown.serviceAmount > 0 && <Row label="Games & services" value={formatMoney(breakdown.serviceAmount, sym)} />}
             <div className="my-2 border-t border-border" />
@@ -174,6 +197,41 @@ export function EndSessionModal({
               <span className="font-bold">TOTAL</span>
               <span className="text-xl font-extrabold tabular-nums">{formatMoney(breakdown.total, sym)}</span>
             </div>
+          </div>
+
+          {/* customer (optional) */}
+          <div>
+            <p className="label-base">Customer <span className="font-normal normal-case text-muted">(optional)</span></p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div className="relative">
+                <User className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" aria-hidden />
+                <Input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="Walk-in"
+                  aria-label="Customer name"
+                  className="pl-10"
+                  maxLength={120}
+                  autoComplete="off"
+                />
+              </div>
+              <div className="relative">
+                <Phone className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" aria-hidden />
+                <Input
+                  value={mobile}
+                  onChange={(e) => setMobile(e.target.value)}
+                  placeholder="Mobile"
+                  inputMode="tel"
+                  aria-label="Customer mobile"
+                  className="pl-10"
+                  maxLength={20}
+                  autoComplete="off"
+                />
+              </div>
+            </div>
+            {mobile.trim() && !looksLikeMobile(mobile) && (
+              <p className="mt-1 text-xs text-warning">Looks like an incomplete number</p>
+            )}
           </div>
 
           {/* discount */}

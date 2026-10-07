@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth, jsonError } from '@/lib/supabase/api';
+import { requireAuth, jsonError, friendlyError, audit, dbErrorStatus } from '@/lib/supabase/api';
 import { mapInvoice, mapInvoiceItem, mapPayment, mapSettings } from '@/lib/mappers';
 
 export const dynamic = 'force-dynamic';
@@ -29,4 +29,34 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     payments: (paymentsRes.data ?? []).map(mapPayment),
     settings: mapSettings(settingsRes.data ?? {}),
   });
+}
+
+/** DELETE /api/admin/invoices/[id] — permanently delete an invoice, its lines
+ *  and payments (ADMIN only). The session record itself is kept. */
+export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
+  const { ctx, response } = await requireAuth(['ADMIN']);
+  if (!ctx) return response!;
+  const { admin, userId } = ctx;
+
+  const { data: inv } = await admin
+    .from('invoices')
+    .select('id, invoice_number, total_amount, customer_name, session_id')
+    .eq('id', params.id)
+    .maybeSingle();
+  if (!inv) return jsonError('Invoice not found', 404);
+
+  // invoice_items + payments cascade with the invoice
+  const { error } = await admin.from('invoices').delete().eq('id', params.id);
+  if (error) return jsonError(friendlyError(error), dbErrorStatus(error));
+
+  if (inv.session_id) {
+    await admin.from('sessions').update({ payment_status: 'PENDING' }).eq('id', inv.session_id);
+  }
+
+  await audit(admin, userId, 'invoice.deleted', 'invoice', params.id, {
+    invoiceNumber: inv.invoice_number,
+    total: Number(inv.total_amount),
+    customer: inv.customer_name,
+  });
+  return NextResponse.json({ ok: true });
 }

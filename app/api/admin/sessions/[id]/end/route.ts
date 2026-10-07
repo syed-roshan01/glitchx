@@ -32,6 +32,17 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (!parsed.success) return jsonError(parsed.error.issues[0]?.message ?? 'Invalid input');
   const input = parsed.data;
 
+  // ---- optional customer details typed on the end-session screen ----
+  if (body && ('customerName' in body || 'customerMobile' in body)) {
+    const { error: cerr } = await admin.rpc('admin_set_session_customer', {
+      p_session_id: params.id,
+      p_name: input.customerName,
+      p_mobile: input.customerMobile,
+      p_acting_user: userId,
+    });
+    if (cerr) return jsonError(friendlyError(cerr), 400);
+  }
+
   // ---- load everything needed for the final bill ----
   const { data: raw, error: serr } = await admin
     .from('sessions')

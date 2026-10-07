@@ -11,6 +11,8 @@ export interface PublicSettings {
   allow_public_bookings: boolean | null;
   waitlist_enabled: boolean | null;
   booking_max_days_ahead: number | null;
+  billing_mode?: 'EXACT_MINUTES' | 'ROUND_UP_15' | 'ROUND_UP_30' | 'ROUND_UP_60' | null;
+  min_billing_minutes?: number | null;
 }
 
 export type BusyKind = 'BOOKING' | 'SCHEDULED' | 'LIVE';

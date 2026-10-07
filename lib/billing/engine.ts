@@ -18,6 +18,9 @@ export interface PlanSnapshot {
   billing_type: BillingType;
   price: number;
   duration_minutes: number | null;
+  /** staff-entered price for this session — peak-hour rules never override it */
+  custom?: boolean;
+  base_price?: number;
 }
 
 export interface RateRule {
@@ -169,7 +172,7 @@ export function resolveRate(
   rules: RateRule[] | undefined,
   ctx: RateContext
 ): ResolvedRate {
-  const rule = rules && rules.length > 0 ? matchPricingRule(rules, ctx) : null;
+  const rule = !plan.custom && rules && rules.length > 0 ? matchPricingRule(rules, ctx) : null;
   if (rule) return { perMinute: rule.price / 60, ruleApplied: rule };
   return { perMinute: basePerMinuteRate(plan), ruleApplied: null };
 }
@@ -216,27 +219,26 @@ export function liveElapsedSeconds(timing: SessionTiming, now: Date = new Date()
   return Math.max(0, (now.getTime() - start) / 1000 - paused);
 }
 
-/** Price estimate for a fixed-duration booking (no rules). */
+/**
+ * Price estimate for a planned duration (no peak rules). Applies the SAME
+ * rounding policy as the final bill, so an estimate never differs from what
+ * the timer will charge for that duration (e.g. 56 min at ROUND_UP_15 is
+ * billed as 60 min). Without a billing mode it charges exact minutes.
+ */
 export function estimateBookingAmount(
   plan: PlanSnapshot | null,
-  durationMinutes: number
+  durationMinutes: number,
+  billingMode: BillingMode = 'EXACT_MINUTES',
+  minBillingMinutes = 0
 ): number {
-  if (!plan) return 0;
-  switch (plan.billing_type) {
-    case 'HOURLY':
-      return round2((plan.price / 60) * durationMinutes);
-    case 'PER_MINUTE':
-      return round2(plan.price * durationMinutes);
-    case 'FIXED':
-      return round2(plan.price);
-    case 'PACKAGE': {
-      if (!plan.duration_minutes) return round2(plan.price);
-      const extra = Math.max(durationMinutes - plan.duration_minutes, 0);
-      return round2(plan.price + extra * (plan.price / plan.duration_minutes));
-    }
-    default:
-      return 0;
-  }
+  if (!plan || durationMinutes <= 0) return 0;
+  const billable = roundBillableMinutes(durationMinutes * 60, billingMode, minBillingMinutes);
+  return computeGamingCharge(
+    plan,
+    undefined,
+    { resourceId: '', resourceType: '', startTimestamp: 0 },
+    billable
+  ).amount;
 }
 
 export interface BreakdownArgs {
