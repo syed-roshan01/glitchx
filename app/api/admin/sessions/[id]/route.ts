@@ -28,8 +28,19 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   if (!ctx) return response!;
   const { admin } = ctx;
 
-  const session = await loadSession(admin, params.id);
+  let session = await loadSession(admin, params.id);
   if (!session) return jsonError('Session not found', 404);
+
+  // A scheduled session whose start time has arrived must be ACTIVE —
+  // activate it now rather than waiting for some other page load.
+  if (
+    session.status === 'SCHEDULED' &&
+    session.scheduled_start_time &&
+    new Date(session.scheduled_start_time).getTime() <= Date.now()
+  ) {
+    await admin.rpc('activate_due_sessions');
+    session = (await loadSession(admin, params.id)) ?? session;
+  }
 
   const [itemsRes, settingsRes, rulesRes, invoiceRes] = await Promise.all([
     admin.from('session_items').select('*').eq('session_id', session.id).order('created_at'),

@@ -125,6 +125,11 @@ export function SessionCard({
           <p className="mt-0.5 font-mono text-sm font-extrabold tabular-nums text-secondary">
             {breakdown ? formatDuration(breakdown.elapsedSeconds) : '—'}
           </p>
+          {paused && session.paused_at && (
+            <p className="text-[10px] font-bold text-warning">
+              frozen · paused for {formatDuration(((now ?? new Date()).getTime() - new Date(session.paused_at).getTime()) / 1000)}
+            </p>
+          )}
         </div>
         <div>
           <p className="text-[10px] font-bold uppercase tracking-wider text-muted">Current bill</p>

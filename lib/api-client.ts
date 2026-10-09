@@ -4,9 +4,12 @@
 
 export class ApiError extends Error {
   status: number;
-  constructor(message: string, status: number) {
+  /** extra fields from the error response (e.g. `blockedBy`) */
+  body: Record<string, unknown> | null;
+  constructor(message: string, status: number, body?: Record<string, unknown> | null) {
     super(message);
     this.status = status;
+    this.body = body ?? null;
   }
 }
 
@@ -20,7 +23,20 @@ async function request<T>(url: string, method: string, body?: unknown): Promise<
   const text = await res.text();
   const data = text ? JSON.parse(text) : null;
   if (!res.ok) {
-    throw new ApiError(data?.error || `Request failed (${res.status})`, res.status);
+    const err = new ApiError(data?.error || `Request failed (${res.status})`, res.status, data);
+    // expose top-level extra fields (blockedBy, …) directly on the error
+    if (data && typeof data === 'object') {
+      for (const [k, v] of Object.entries(data)) {
+        if (k !== 'error' && !(k in err)) {
+          try {
+            (err as any)[k] = v;
+          } catch {
+            /* read-only field — ignore */
+          }
+        }
+      }
+    }
+    throw err;
   }
   return data as T;
 }

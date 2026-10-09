@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api-client';
-import { useApi, invalidate } from '@/lib/use-api';
+import { useApi, invalidate, seed } from '@/lib/use-api';
 import { useSettings } from '@/components/admin/admin-context';
 import { PageHeader } from '@/components/ui/misc';
 import { Button } from '@/components/ui/button';
@@ -182,11 +182,15 @@ export default function NewSessionPage() {
 
   const mobileHint = mobile.trim() && !looksLikeMobile(mobile) ? 'Looks short — check the number (you can fix it later)' : '';
   const canStart = resourceFree && !!plan && priceValid && !starting;
+  // set when the station is held by a live session (usually PAUSED) —
+  // shown inline with a one-click escape instead of a bare toast
+  const [blockedBy, setBlockedBy] = useState<{ id: string; status: string } | null>(null);
 
   async function start(e?: React.FormEvent) {
     e?.preventDefault();
     if (!resource || !resourceFree || !plan || !priceValid || starting) return;
     setStarting(true);
+    setBlockedBy(null);
     try {
       const body: Record<string, unknown> = {
         resourceId: resource.id,
@@ -205,7 +209,12 @@ export default function NewSessionPage() {
         body.expectedMinutes = clampMinutes(expectedMinutes);
       }
 
-      const res = await api.post<{ id: string }>('/api/admin/sessions', body);
+      const res = await api.post<{ id: string; session?: Session }>('/api/admin/sessions', body);
+      // Seed the detail page so the timer renders the instant we land
+      // (the full detail still loads in the background).
+      if (res.session) {
+        seed(`/api/admin/sessions/${res.id}`, { session: res.session, items: [], rules: [] });
+      }
       invalidate('/api/admin/sessions');
       invalidate('/api/admin/dashboard');
       invalidate('/api/admin/resources');
@@ -213,7 +222,12 @@ export default function NewSessionPage() {
       router.push(`/admin/sessions/${res.id}`);
       // keep the button busy until the route changes (no double starts)
     } catch (err: any) {
-      toast.error(err.message);
+      if (err?.blockedBy?.id) {
+        setBlockedBy(err.blockedBy);
+        toast.error(err.message);
+      } else {
+        toast.error(err.message);
+      }
       setStarting(false);
     }
   }
@@ -579,6 +593,21 @@ export default function NewSessionPage() {
 
       {/* sticky start bar */}
       <div className="glass sticky bottom-20 z-30 rounded-2xl border-primary/30 p-3 shadow-glow sm:bottom-4 sm:p-4">
+        {blockedBy && (
+          <div className="mb-2.5 flex flex-col gap-2 rounded-xl border border-danger/40 bg-danger/10 p-3 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-xs font-bold text-danger">
+              {blockedBy.status === 'PAUSED'
+                ? 'This station is held by a PAUSED session. Resume it to continue its timer, or end it — then start again.'
+                : 'This station already has a running session. End it first.'}
+            </p>
+            <Link
+              href={`/admin/sessions/${blockedBy.id}`}
+              className="shrink-0 rounded-xl border border-danger/40 bg-surface px-3 py-2 text-center text-xs font-bold text-danger hover:bg-surface-2"
+            >
+              Open {blockedBy.status === 'PAUSED' ? 'paused ' : ''}session →
+            </Link>
+          </div>
+        )}
         <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
           <p className="min-h-[20px] truncate text-sm">
             {resource && plan && pricedPlan ? (

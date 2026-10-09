@@ -60,6 +60,19 @@ export default function SessionDetailPage() {
   const rules = data?.rules;
   const live = session?.status === 'ACTIVE' || session?.status === 'PAUSED';
 
+  // Sitting on a SCHEDULED session: flip it to ACTIVE (timer starts) the
+  // moment its start time arrives — the GET activates it server-side.
+  const dueAt = session?.status === 'SCHEDULED' && session.scheduled_start_time
+    ? new Date(session.scheduled_start_time).getTime()
+    : null;
+  useEffect(() => {
+    if (dueAt === null) return;
+    const wait = dueAt + 1500 - Date.now();
+    if (wait > 3_600_000) return; // more than an hour out — realtime/polling covers it
+    const t = setTimeout(() => reload(), Math.max(wait, 2000));
+    return () => clearTimeout(t);
+  }, [dueAt, reload]);
+
   // Completed sessions: the API returns the invoice generated for this session.
   const invoiceSearch = session ? session.customer_mobile || session.customer_name || '' : '';
   const invoice = (data as { invoice?: Pick<Invoice, 'id' | 'invoice_number'> | null } | undefined)?.invoice ?? null;
@@ -195,7 +208,11 @@ export default function SessionDetailPage() {
             </p>
             <p className="text-xs text-muted">
               Started {formatClock(session.actual_start_time, settings.timezone)}
-              {session.status === 'PAUSED' && ' · PAUSED — not billing'}
+              {session.status === 'PAUSED' && session.paused_at && (
+                <span className="font-bold text-warning">
+                  {' '}· paused for {formatDuration(((now ?? new Date()).getTime() - new Date(session.paused_at).getTime()) / 1000)} — not billing
+                </span>
+              )}
             </p>
             <p className="mt-2 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-sm">
               <span className="font-bold text-content">

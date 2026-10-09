@@ -192,6 +192,37 @@ DB exclusion constraints; invoice prices snapshotted (immutable history).
   - Note: DSH Desktop also runs `scripts/dev-server.cjs` in this workspace — it rewrites
     `.next` in dev mode; don't run `next start` from the same folder while it runs.
 
+- **2026-10-09 (session 6):** "Timer isn't starting when created session" — root-caused + fixed.
+  - **Root cause (data-verified via audit log):** the user paused a test session on
+    PS5 02 (`session.paused` 10 s after creation). A paused session KEEPS holding its
+    station (exclusion constraint), so creating a new session on that station failed
+    with "This station already has a running session" — which reads as "timer isn't
+    starting". Everything server-side was verified correct (session → ACTIVE with
+    `actual_start_time`, breakdown computing, pause/resume/end all working, 00015 applied).
+  - Fixes shipped (no migration — code only, deploys with the app):
+    1. `POST /api/admin/sessions` → **409 + `blockedBy` {id,status}** + actionable
+       message when the station is held (paused called out explicitly); the wizard
+       shows an inline panel linking straight to that session.
+    2. POST now returns the **full session object**; the wizard seeds the detail
+       page's `useApi` cache (`seed()` in use-api.ts) → timer renders instantly on
+       navigation (no spinner-then-tick gap; matters on Vercel cold starts ~2 s).
+    3. **Scheduled sessions auto-activate**: `GET /api/admin/sessions/[id]` runs
+       `activate_due_sessions` when the requested session is due; the detail page
+       also schedules a one-shot refetch at the due moment while you watch.
+    4. "paused for Xm — not billing" hints on dashboard cards + detail page.
+  - `lib/api-client.ts`: `ApiError` now carries response body fields (blockedBy…).
+  - Verified: typecheck ✓, 26/26 billing tests ✓, live probes for all three fixes ✓
+    (`.pgtest/fix-verify.cjs`, `fix23-verify.cjs`, `debug-fix3.cjs` — temp station
+    created/removed by the script; user's live data never touched).
+  - Dev-server quirk (again): one verification run failed because dev served a
+    stale compiled module after edits; re-run passed. Restart the dev server when
+    a just-verified behavior fails in dev.
+  - Sandbox finding: a real browser CANNOT run here (Chrome/Edge mojo IPC needs
+    named pipes → EPERM even with crashpad disabled). Browser-level UI testing is
+    out of scope in this environment.
+  - State left for the user: the paused session f3ca01b5 still holds **PS5 02**
+    (their data — not auto-cleaned). PS5 01 was in MAINTENANCE (user-set).
+
 ## 9. Known issues / pending
 
 1. ~~Apply 00014 to live Supabase~~ **DONE — verified applied 2026-10-06** (session 4
@@ -201,8 +232,9 @@ DB exclusion constraints; invoice prices snapshotted (immutable history).
 2. **Admin account confirmed in use** — user has customized pricing via the admin
    panel (observed 2026-10-06).
 3. Custom domain + printed QR not done yet (QR auto-tracks origin once domain is added).
-4. Optional: pg_cron for `activate_due_sessions` (currently lazy on page loads — fine
-   for one cafe); WhatsApp/SMS waitlist notifications; logo upload to Supabase Storage.
+4. Optional: pg_cron for `activate_due_sessions` (now also lazy-activated on session
+   detail GETs — good enough for one cafe); WhatsApp/SMS waitlist notifications;
+   logo upload to Supabase Storage.
 5. `next.config.mjs` carries `workerThreads: true` + `NEXT_DISABLE_BUILD_WORKER`
    opt-in — safe, documented in README §6 note.
 6. **Avoid parallel AI sessions in this folder** — see the `d7ad75a` note in §3.

@@ -42,6 +42,9 @@ next-env.d.ts
 # embedded postgres test harness artifacts (run.cjs itself IS committed)
 /.pgtest/data/
 /.pgtest/*.log
+/.pgtest/chrome-profile/
+/.pgtest/edge-profile/
+/.pgtest/*.png
 
 # local AI-tooling state (e.g. Claude Code launch configs)
 /.claude/

@@ -115,7 +115,35 @@ export async function POST(req: NextRequest) {
     p_guest_name: input.guestName,
     p_guest_mobile: input.guestMobile,
   });
-  if (error) return jsonError(friendlyError(error), 400);
+  if (error) {
+    // A live session is holding the station. If it's PAUSED the message
+    // must say so — the fix is one click (resume or end), not a mystery.
+    if (/RESOURCE_BUSY/.test(error.message ?? '')) {
+      const { data: blocker } = await admin
+        .from('sessions')
+        .select('id, status, paused_at, resources(name)')
+        .eq('resource_id', input.resourceId)
+        .in('status', ['ACTIVE', 'PAUSED'])
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (blocker) {
+        const paused = blocker.status === 'PAUSED';
+        const res: any = Array.isArray(blocker.resources) ? blocker.resources[0] : blocker.resources;
+        const resourceName = res?.name ?? 'This station';
+        return NextResponse.json(
+          {
+            error: paused
+              ? `${resourceName} is held by a PAUSED session — resume it (timer continues) or end it, then start again.`
+              : `${resourceName} already has a running session. End it first.`,
+            blockedBy: { id: blocker.id as string, status: blocker.status as string },
+          },
+          { status: 409 }
+        );
+      }
+    }
+    return jsonError(friendlyError(error), 400);
+  }
 
   await audit(admin, userId, 'session.started', 'session', sessionId, {
     resourceId: input.resourceId,
@@ -124,5 +152,22 @@ export async function POST(req: NextRequest) {
     scheduled: new Date(startTime) > new Date(Date.now() + 60_000),
   });
 
-  return NextResponse.json({ id: sessionId });
+  // Return the full session so the detail page can render (and tick the
+  // timer) immediately, without waiting for its own first fetch.
+  const row = await admin
+    .from('sessions')
+    .select('*, customers(name, mobile), resources(name, type)')
+    .eq('id', sessionId)
+    .single();
+  const session = row.data
+    ? mapSession({
+        ...row.data,
+        customer_name: row.data.customers?.name,
+        customer_mobile: row.data.customers?.mobile,
+        resource_name: row.data.resources?.name,
+        resource_type: row.data.resources?.type,
+      })
+    : null;
+
+  return NextResponse.json({ id: sessionId, session });
 }

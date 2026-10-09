@@ -52,6 +52,13 @@ export function prefetch(key: string, maxAgeMs = 15_000) {
   fetchKey(key).catch(() => {});
 }
 
+/** Seed the cache with a partial/optimistic value. The next `useApi`
+ * mount still refetches, so this only removes the initial spinner. */
+export function seed(key: string, data: unknown) {
+  cache.set(key, { data, at: Date.now() });
+  notify(key);
+}
+
 /** Refetch every cached key starting with `prefix` (default: all). */
 export function invalidate(prefix = '/api/admin') {
   for (const key of Array.from(cache.keys())) {
