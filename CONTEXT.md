@@ -25,6 +25,7 @@
 | Supabase project ref | `vfonvktaqurwfapkgfuz` → `https://vfonvktaqurwfapkgfuz.supabase.co` |
 | Region | **Mumbai (ap-south-1)** — verified 2026-10-06 by mapping the DB host IP against AWS ip-ranges. (Earlier "not Mumbai" note was wrong; the ~100ms RTT was this machine's network.) Vercel functions pinned to `bom1` via `vercel.json` so server↔DB is same-region. |
 | Auth | Email/password, staff-only. **"Confirm email" is OFF.** First account via `/admin/setup` becomes ADMIN (claim via `claim_first_admin()`). |
+| Billing mode | **`EXACT_MINUTES` (per-minute billing)** — switched 2026-10-09 at the owner's request (was ROUND_UP_15). Bill grows every minute; `min_billing_minutes` = 0. If the DB is ever reset, re-set this in /admin/settings → Billing. |
 | Schema | 15 migrations, **all applied to live** (00014 verified present 2026-10-06 by probing its RPCs — `admin_record_payment`, `public_get_busy_slots`, `public_lookup_booking`, `public_cancel_booking`, `mobile_digits` all respond). Combined in [`supabase/setup.sql`](supabase/setup.sql); reset via [`supabase/reset.sql`](supabase/reset.sql). Seed baseline: PS5 ₹100/hr (+2h pkg ₹180), Pool ₹300/hr (+30min ₹150) — **user has since customized live pricing** (e.g. Pool ₹200/hr). |
 | Keys | All in `.env.local` (gitignored — never commit; rotate if leaked). Vercel has **3 env vars** (URL, anon, service_role). `NEXT_PUBLIC_APP_URL` deliberately NOT set — the booking QR falls back to the request origin, so it auto-tracks the domain. |
 | Custom domain | Not connected yet. When added in Vercel → Settings → Domains, QR + everything follows automatically. |
@@ -222,6 +223,13 @@ DB exclusion constraints; invoice prices snapshotted (immutable history).
     out of scope in this environment.
   - State left for the user: the paused session f3ca01b5 still holds **PS5 02**
     (their data — not auto-cleaned). PS5 01 was in MAINTENANCE (user-set).
+  - Billing switched to **per-minute (`EXACT_MINUTES`)** at the owner's request
+    ("billed by 15 minutes into 4 cycles — I want it live for each minute").
+    No code change needed — the mode existed end-to-end (engine, SQL estimates,
+    settings UI "Per minute (exact)", end-session flow). Changed via the real
+    settings API (admin temp user, `.pgtest/switch-billing.cjs`); verified on
+    the user's live running session: 10.6 min → 11 billable min (₹27.50),
+    previously 15 min (₹37.50). Takes effect instantly, even mid-session.
 
 ## 9. Known issues / pending
 
