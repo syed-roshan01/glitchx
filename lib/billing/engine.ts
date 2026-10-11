@@ -54,6 +54,9 @@ export interface BillingBreakdown {
   perMinute: number;
   ruleApplied: RateRule | null;
   gamingAmount: number;
+  /** what the timer would charge; differs from gamingAmount when staff set the final total */
+  computedGamingAmount: number;
+  gamingAdjusted: boolean;
   itemAmount: number;
   serviceAmount: number;
   subtotal: number;
@@ -255,6 +258,74 @@ export interface BreakdownArgs {
   serviceAmount?: number;
   discount?: { type: DiscountType; value: number } | null;
   tax?: { enabled: boolean; name?: string | null; rate?: number | null } | null;
+  /** staff-set time charge (from an edited final total) — replaces the timer amount */
+  gamingOverride?: number | null;
+}
+
+type BillTotals = Pick<BillingBreakdown, 'subtotal' | 'discountAmount' | 'taxAmount' | 'total'>;
+
+/** Subtotal → discount → tax → total. Mirrors admin_end_session_and_invoice exactly. */
+export function computeBillTotals(
+  gamingAmount: number,
+  itemAmount: number,
+  serviceAmount: number,
+  discount: { type: DiscountType; value: number } | null | undefined,
+  taxRate: number
+): BillTotals {
+  const subtotal = round2(gamingAmount + itemAmount + serviceAmount);
+  let discountAmount = 0;
+  if (discount && discount.value > 0) {
+    discountAmount =
+      discount.type === 'PERCENT'
+        ? round2((subtotal * Math.min(discount.value, 100)) / 100)
+        : Math.min(round2(discount.value), subtotal);
+  }
+  const taxAmount = round2(((subtotal - discountAmount) * taxRate) / 100);
+  const total = round2(Math.max(subtotal - discountAmount + taxAmount, 0));
+  return { subtotal, discountAmount, taxAmount, total };
+}
+
+/**
+ * The time charge that makes the bill come to exactly `targetTotal`, keeping
+ * food/services, the discount and tax as they are. Returns null when the
+ * target is below what the other lines already cost.
+ */
+export function gamingForTargetTotal(args: {
+  targetTotal: number;
+  itemAmount?: number;
+  serviceAmount?: number;
+  discount?: { type: DiscountType; value: number } | null;
+  taxRate?: number;
+}): number | null {
+  const target = round2(args.targetTotal);
+  const items = round2(args.itemAmount ?? 0);
+  const services = round2(args.serviceAmount ?? 0);
+  const rate = args.taxRate ?? 0;
+  const d = args.discount && args.discount.value > 0 ? args.discount : null;
+  if (!Number.isFinite(target) || target < 0) return null;
+
+  const afterTax = target / (1 + rate / 100);
+  let subtotal: number;
+  if (d?.type === 'PERCENT') {
+    const keep = 1 - Math.min(d.value, 100) / 100;
+    if (keep <= 0) return target === 0 ? 0 : null;
+    subtotal = afterTax / keep;
+  } else if (d?.type === 'FIXED') {
+    subtotal = afterTax + d.value;
+  } else {
+    subtotal = afterTax;
+  }
+  const estimate = round2(subtotal - items - services);
+
+  // rounding (2-dp discount/tax) can land a paisa off — pick the exact match
+  const candidates = [0, -0.01, 0.01, -0.02, 0.02, -0.03, 0.03].map((delta) => round2(estimate + delta));
+  for (const g of candidates) {
+    if (g < 0) continue;
+    if (computeBillTotals(g, items, services, d, rate).total === target) return g;
+  }
+  return estimate >= 0 && computeBillTotals(estimate, items, services, d, rate).total >= target - 0.05
+    ? estimate
+    : null;
 }
 
 /** Full session bill — used for the live "current amount", the
@@ -278,27 +349,27 @@ export function calculateSessionBreakdown(args: BreakdownArgs): BillingBreakdown
 
   const itemAmount = round2(args.itemAmount ?? 0);
   const serviceAmount = round2(args.serviceAmount ?? 0);
-  const subtotal = round2(gaming.amount + itemAmount + serviceAmount);
-
-  let discountAmount = 0;
-  if (args.discount && args.discount.value > 0) {
-    discountAmount =
-      args.discount.type === 'PERCENT'
-        ? round2((subtotal * Math.min(args.discount.value, 100)) / 100)
-        : Math.min(round2(args.discount.value), subtotal);
-  }
+  const gamingAdjusted = args.gamingOverride != null && Number.isFinite(args.gamingOverride);
+  const gamingAmount = gamingAdjusted ? round2(Math.max(args.gamingOverride as number, 0)) : gaming.amount;
 
   const taxEnabled = args.tax?.enabled ?? false;
   const taxRate = taxEnabled ? args.tax?.rate ?? 0 : 0;
-  const taxAmount = round2(((subtotal - discountAmount) * taxRate) / 100);
-  const total = round2(Math.max(subtotal - discountAmount + taxAmount, 0));
+  const { subtotal, discountAmount, taxAmount, total } = computeBillTotals(
+    gamingAmount,
+    itemAmount,
+    serviceAmount,
+    args.discount,
+    taxRate
+  );
 
   return {
     elapsedSeconds,
     billableMinutes,
     perMinute: gaming.perMinute,
     ruleApplied: gaming.ruleApplied,
-    gamingAmount: gaming.amount,
+    gamingAmount,
+    computedGamingAmount: gaming.amount,
+    gamingAdjusted,
     itemAmount,
     serviceAmount,
     subtotal,

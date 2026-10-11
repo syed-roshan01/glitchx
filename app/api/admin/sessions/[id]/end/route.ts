@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, jsonError, friendlyError, audit } from '@/lib/supabase/api';
 import { mapSession, mapSessionItem, mapSettings, mapPricingRule } from '@/lib/mappers';
-import { calculateSessionBreakdown } from '@/lib/billing/engine';
+import { calculateSessionBreakdown, gamingForTargetTotal } from '@/lib/billing/engine';
 import { endSessionSchema } from '@/lib/validations/schemas';
 import { num } from '@/lib/billing/format';
 
@@ -88,7 +88,23 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       ? { type: input.discountType, value: Number(input.discountValue) }
       : null;
 
+  const taxRate = settings.tax_enabled ? settings.tax_rate ?? 0 : 0;
+  let gamingOverride: number | null = null;
+  if (input.finalTotal != null) {
+    gamingOverride = gamingForTargetTotal({
+      targetTotal: input.finalTotal,
+      itemAmount,
+      serviceAmount,
+      discount,
+      taxRate,
+    });
+    if (gamingOverride === null) {
+      return jsonError('The total cannot be less than the food, drinks and services on this bill.', 400);
+    }
+  }
+
   const breakdown = calculateSessionBreakdown({
+    gamingOverride,
     plan: session.pricing_plan_snapshot,
     rules,
     billingMode: settings.billing_mode,
@@ -127,6 +143,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     invoiceNumber: result?.invoice_number,
     total: num(result?.total_amount),
     paymentMethod: input.paymentMethod ?? null,
+    ...(breakdown.gamingAdjusted
+      ? {
+          amountEdited: true,
+          timerGamingAmount: breakdown.computedGamingAmount,
+          finalGamingAmount: breakdown.gamingAmount,
+          requestedTotal: input.finalTotal,
+        }
+      : {}),
   });
 
   return NextResponse.json({

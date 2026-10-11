@@ -7,11 +7,11 @@ import { Input, Field } from '@/components/ui/input';
 import { useToast } from '@/components/ui/toast';
 import { api } from '@/lib/api-client';
 import { useNow } from '@/hooks/use-now';
-import { calculateSessionBreakdown } from '@/lib/billing/engine';
+import { calculateSessionBreakdown, gamingForTargetTotal, computeBillTotals } from '@/lib/billing/engine';
 import { formatMoney, formatDuration, formatClock } from '@/lib/billing/format';
 import { customerLabel, customerMobile, looksLikeMobile, rateLabel, billingModeText, CustomPriceBadge } from '@/components/admin/pricing-display';
 import type { CafeSettings, PricingRule, Session, SessionItem } from '@/types';
-import { Banknote, Smartphone, CreditCard, Wallet, Percent, IndianRupee, User, Phone } from 'lucide-react';
+import { Banknote, Smartphone, CreditCard, Wallet, Percent, IndianRupee, User, Phone, Pencil, RotateCcw } from 'lucide-react';
 
 /** End-session confirmation with the live final bill, discount and
  *  payment method. Amounts come from the billing engine; the server
@@ -43,6 +43,16 @@ export function EndSessionModal({
   const savedMobile = customerMobile(session) ?? '';
   const [name, setName] = useState(savedName);
   const [mobile, setMobile] = useState(savedMobile);
+  // staff-edited final amount (null = use the timer's bill)
+  const [finalTotal, setFinalTotal] = useState<number | null>(null);
+  const [editingTotal, setEditingTotal] = useState(false);
+  const [totalDraft, setTotalDraft] = useState('');
+
+  useEffect(() => {
+    if (!open) return;
+    setFinalTotal(null);
+    setEditingTotal(false);
+  }, [open]);
 
   // prefill customer details from the session every time the modal opens
   useEffect(() => {
@@ -61,6 +71,8 @@ export function EndSessionModal({
 
   const breakdown = useMemo(() => {
     if (!now || !session.actual_start_time) return null;
+    const discount = discountType && discountValue > 0 ? { type: discountType, value: Number(discountValue) } : null;
+    const taxRate = settings.tax_enabled ? settings.tax_rate ?? 0 : 0;
     const itemAmount = items
       .filter((i) => ['FOOD', 'DRINK', 'OTHER'].includes(i.item_type))
       .reduce((s, i) => s + i.total_price, 0);
@@ -83,10 +95,60 @@ export function EndSessionModal({
       endAt: now,
       itemAmount,
       serviceAmount,
-      discount: discountType && discountValue > 0 ? { type: discountType, value: Number(discountValue) } : null,
+      discount,
       tax: { enabled: settings.tax_enabled, name: settings.tax_name, rate: settings.tax_rate },
+      // an edited total freezes the time charge at the amount that produces it
+      gamingOverride:
+        finalTotal != null
+          ? gamingForTargetTotal({ targetTotal: finalTotal, itemAmount, serviceAmount, discount, taxRate })
+          : null,
     });
-  }, [now, session, items, settings, rules, discountType, discountValue]);
+  }, [now, session, items, settings, rules, discountType, discountValue, finalTotal]);
+
+  // smallest total allowed (food + services after discount/tax, zero time charge)
+  const minTotal = useMemo(() => {
+    if (!breakdown) return 0;
+    const discount = discountType && discountValue > 0 ? { type: discountType, value: Number(discountValue) } : null;
+    const taxRate = settings.tax_enabled ? settings.tax_rate ?? 0 : 0;
+    const base = breakdown.itemAmount + breakdown.serviceAmount;
+    const afterDiscount =
+      discount?.type === 'PERCENT'
+        ? base * (1 - Math.min(discount.value, 100) / 100)
+        : discount?.type === 'FIXED'
+          ? Math.max(base - discount.value, 0)
+          : base;
+    return Math.round(afterDiscount * (1 + taxRate / 100) * 100) / 100;
+  }, [breakdown, discountType, discountValue, settings.tax_enabled, settings.tax_rate]);
+
+  // what the bill would be without the edit
+  const timerTotal = breakdown
+    ? computeBillTotals(
+        breakdown.computedGamingAmount,
+        breakdown.itemAmount,
+        breakdown.serviceAmount,
+        discountType && discountValue > 0 ? { type: discountType, value: Number(discountValue) } : null,
+        breakdown.taxRate
+      ).total
+    : 0;
+
+  const draftValue = Number(totalDraft);
+  const draftError =
+    totalDraft.trim() === '' || !Number.isFinite(draftValue)
+      ? 'Enter an amount'
+      : draftValue < minTotal
+        ? `Can't be less than ${formatMoney(minTotal, settings.currency_symbol || '₹')} (food & services)`
+        : null;
+
+  function startEditTotal() {
+    if (!breakdown) return;
+    setTotalDraft(String(finalTotal ?? breakdown.total));
+    setEditingTotal(true);
+  }
+  function applyTotal() {
+    if (draftError) return;
+    setFinalTotal(Math.round(draftValue * 100) / 100);
+    setEditingTotal(false);
+  }
 
   const sym = settings.currency_symbol || '₹';
 
@@ -102,6 +164,7 @@ export function EndSessionModal({
             ? { discountType, discountValue: Number(discountValue) }
             : { discountType: 'FIXED' as const, discountValue: 0 }),
           paymentMethod,
+          ...(finalTotal != null ? { finalTotal } : {}),
           // optional — only sent when staff changed them here
           ...(name.trim() !== savedName || mobile.trim() !== savedMobile
             ? { customerName: name.trim() || null, customerMobile: mobile.trim() || null }
@@ -175,7 +238,15 @@ export function EndSessionModal({
 
           {/* bill lines */}
           <div className="space-y-1.5 text-sm">
-            <Row label={`Gaming (${breakdown.billableMinutes} min${settings.billing_mode !== 'EXACT_MINUTES' ? ', rounded' : ''})`} value={formatMoney(breakdown.gamingAmount, sym)} />
+            <Row
+              label={`Gaming (${breakdown.billableMinutes} min${settings.billing_mode !== 'EXACT_MINUTES' ? ', rounded' : ''})`}
+              value={formatMoney(breakdown.gamingAmount, sym)}
+            />
+            {breakdown.gamingAdjusted && (
+              <p className="text-[11px] text-warning">
+                Adjusted from {formatMoney(breakdown.computedGamingAmount, sym)} (timer) to match the edited total
+              </p>
+            )}
             <p className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
               {breakdown.ruleApplied
                 ? `${formatMoney(breakdown.ruleApplied.price, sym)}/hr (${breakdown.ruleApplied.name})`
@@ -193,10 +264,81 @@ export function EndSessionModal({
             {breakdown.taxAmount > 0 && (
               <Row label={`${breakdown.taxName ?? 'Tax'} (${breakdown.taxRate}%)`} value={formatMoney(breakdown.taxAmount, sym)} />
             )}
-            <div className="mt-3 flex items-center justify-between rounded-xl bg-gradient-to-r from-primary/20 to-secondary/20 px-4 py-3">
-              <span className="font-bold">TOTAL</span>
-              <span className="text-xl font-extrabold tabular-nums">{formatMoney(breakdown.total, sym)}</span>
-            </div>
+            {editingTotal ? (
+              <div className="mt-3 rounded-xl border border-primary/40 bg-primary/10 px-4 py-3">
+                <label htmlFor="final-total" className="text-xs font-bold uppercase tracking-wide text-muted">
+                  Final amount to charge
+                </label>
+                <div className="mt-1.5 flex items-center gap-2">
+                  <span className="text-lg font-bold text-muted">{sym}</span>
+                  <Input
+                    id="final-total"
+                    type="number"
+                    inputMode="decimal"
+                    min={0}
+                    step="0.01"
+                    autoFocus
+                    value={totalDraft}
+                    onChange={(e) => setTotalDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        applyTotal();
+                      }
+                      if (e.key === 'Escape') setEditingTotal(false);
+                    }}
+                    className="h-11 flex-1 text-lg font-bold tabular-nums"
+                    aria-invalid={!!draftError}
+                    aria-describedby="final-total-hint"
+                  />
+                  <Button size="sm" onClick={applyTotal} disabled={!!draftError}>
+                    Apply
+                  </Button>
+                  <button
+                    type="button"
+                    className="h-9 rounded-lg px-2 text-xs font-semibold text-muted hover:bg-surface-2"
+                    onClick={() => setEditingTotal(false)}
+                  >
+                    Cancel
+                  </button>
+                </div>
+                <p id="final-total-hint" className={`mt-1.5 text-[11px] ${draftError && totalDraft ? 'text-danger' : 'text-muted'}`}>
+                  {draftError && totalDraft
+                    ? draftError
+                    : `Timer bill: ${formatMoney(timerTotal, sym)}. The gaming charge is adjusted so the invoice equals this amount.`}
+                </p>
+              </div>
+            ) : (
+              <div className="mt-3 flex items-center justify-between rounded-xl bg-gradient-to-r from-primary/20 to-secondary/20 px-4 py-3">
+                <span className="font-bold">TOTAL</span>
+                <div className="flex items-center gap-2">
+                  {finalTotal != null && (
+                    <button
+                      type="button"
+                      onClick={() => setFinalTotal(null)}
+                      className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-bold text-muted hover:bg-surface-2"
+                      title="Use the timer amount"
+                    >
+                      <RotateCcw className="h-3 w-3" aria-hidden /> Reset
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={startEditTotal}
+                    className="group flex items-center gap-2 rounded-lg px-2 py-1 hover:bg-surface-2"
+                    aria-label={`Edit total, currently ${formatMoney(breakdown.total, sym)}`}
+                  >
+                    <span className="text-xl font-extrabold tabular-nums">{formatMoney(breakdown.total, sym)}</span>
+                    <Pencil className="h-4 w-4 text-muted group-hover:text-content" aria-hidden />
+                  </button>
+                </div>
+              </div>
+            )}
+            {finalTotal != null && !editingTotal && (
+              <p className="text-right text-[11px] font-semibold text-warning">
+                Edited · timer bill was {formatMoney(timerTotal, sym)}
+              </p>
+            )}
           </div>
 
           {/* customer (optional) */}

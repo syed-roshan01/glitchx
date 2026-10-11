@@ -67,6 +67,8 @@ export const endSessionSchema = z.object({
   discountValue: z.number().min(0).max(100000).optional().nullable(),
   paymentMethod: z.enum(['CASH', 'UPI', 'CARD', 'OTHER']).optional().nullable(),
   paymentReference: z.string().max(120).optional().nullable(),
+  /** optional — staff-edited final amount; the time charge is adjusted to match */
+  finalTotal: z.number().min(0).max(10000000).optional().nullable(),
   /** optional — set/replace the customer details before invoicing */
   customerName: optionalName,
   customerMobile: optionalMobile,

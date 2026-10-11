@@ -9,6 +9,8 @@ import {
   liveElapsedSeconds,
   estimateBookingAmount,
   calculateSessionBreakdown,
+  gamingForTargetTotal,
+  computeBillTotals,
   type PlanSnapshot,
   type RateRule,
 } from '../lib/billing/engine.ts';
@@ -337,5 +339,51 @@ describe('calculateSessionBreakdown (end-to-end bill)', () => {
     });
     money(b.discountAmount, 86.67);
     money(b.total, 0);
+  });
+});
+
+describe('editing the final total at the end of a session', () => {
+  it('no discount/tax: time charge = total − food', () => {
+    money(gamingForTargetTotal({ targetTotal: 200, itemAmount: 40 })!, 160);
+  });
+
+  it('percent discount + GST: lands on the exact total', () => {
+    const discount = { type: 'PERCENT' as const, value: 10 };
+    for (const target of [200, 199.99, 333.33, 1000, 47.5]) {
+      const g = gamingForTargetTotal({ targetTotal: target, itemAmount: 80, serviceAmount: 50, discount, taxRate: 18 });
+      if (target < 130 * 0.9 * 1.18) {
+        assert.equal(g, null);
+        continue;
+      }
+      assert.ok(g !== null);
+      money(computeBillTotals(g!, 80, 50, discount, 18).total, target);
+    }
+  });
+
+  it('fixed discount', () => {
+    const discount = { type: 'FIXED' as const, value: 25 };
+    const g = gamingForTargetTotal({ targetTotal: 300, itemAmount: 30, discount })!;
+    money(computeBillTotals(g, 30, 0, discount, 0).total, 300);
+  });
+
+  it('rejects a total below the food/services already on the bill', () => {
+    assert.equal(gamingForTargetTotal({ targetTotal: 30, itemAmount: 40 }), null);
+  });
+
+  it('breakdown uses the override and reports the timer amount', () => {
+    const b = calculateSessionBreakdown({
+      plan: { name: 'PS5', billing_type: 'HOURLY', price: 150, duration_minutes: null },
+      billingMode: 'EXACT_MINUTES',
+      resourceId: 'r',
+      resourceType: 'PLAYSTATION',
+      timing: { actual_start_time: '2026-10-03T20:00:00Z', paused_at: null, total_paused_seconds: 0 },
+      endAt: new Date('2026-10-03T21:30:00Z'),
+      itemAmount: 40,
+      gamingOverride: 160,
+    });
+    money(b.computedGamingAmount, 225);
+    money(b.gamingAmount, 160);
+    assert.equal(b.gamingAdjusted, true);
+    money(b.total, 200);
   });
 });
