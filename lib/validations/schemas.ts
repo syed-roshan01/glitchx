@@ -72,6 +72,9 @@ export const endSessionSchema = z.object({
   /** optional — set/replace the customer details before invoicing */
   customerName: optionalName,
   customerMobile: optionalMobile,
+  /** optional — the FROZEN billable end captured when "End session" was
+   *  pressed (before filling this form). Server + DB bill this moment. */
+  endAt: z.string().datetime({ offset: true }).optional().nullable(),
 });
 
 export const addSessionItemSchema = z.object({

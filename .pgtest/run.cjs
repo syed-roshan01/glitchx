@@ -232,11 +232,15 @@ async function main() {
     const { rows: [resumed] } = await client.query('select status, total_paused_seconds from public.sessions where id = $1', [session.id]);
     resumed.status === 'ACTIVE' && resumed.total_paused_seconds >= 0 ? pass('resume accumulates pause time') : fail('resume');
 
-    // 10. end session → invoice (billing: 42 min × ₹100/hr ≈ ₹70)
+    // 10. end session → invoice (frozen end: bills the moment End was pressed)
+    // enable WhatsApp auto-send so the invoice trigger is exercised
+    await client.query('update public.whatsapp_state set enabled = true, auto_send = true');
     await client.query('select pg_sleep(0.02)');
+    const frozenEndIso = new Date().toISOString();
+    await client.query('select pg_sleep(0.25)'); // "form fill" delay — must not change the bill
     const { rows: [{ admin_end_session_and_invoice: end }] } = await client.query(
-      'select * from public.admin_end_session_and_invoice($1, $2, $3, $4, $5, null, $6)',
-      [sessionId, JSON.stringify({ duration_seconds: 1, gaming_amount: 1.67 }), 'PERCENT', 10, 'CASH', user.id]
+      'select * from public.admin_end_session_and_invoice($1, $2, $3, $4, $5, null, $6, $7)',
+      [sessionId, JSON.stringify({ duration_seconds: 1, gaming_amount: 1.67 }), 'PERCENT', 10, 'CASH', user.id, frozenEndIso]
     );
     end.invoice_number && /^INV-\d{4}-\d{5}$/.test(end.invoice_number)
       ? pass(`end session → invoice ${end.invoice_number}`)
@@ -251,6 +255,32 @@ async function main() {
     invCheck.status === 'PAID' && invCheck.session_status === 'COMPLETED' && invCheck.payment_status === 'PAID'
       ? pass('session COMPLETED + invoice PAID atomically')
       : fail('end-session state', new Error(JSON.stringify(invCheck)));
+
+    // 10b. frozen end honored + WhatsApp auto-enqueue trigger
+    const { rows: [frozenChk] } = await client.query(
+      'select end_time, duration_seconds from public.sessions where id = $1', [sessionId]
+    );
+    frozenChk.end_time.toISOString() === frozenEndIso
+      ? pass('frozen end_at: session end_time = the End-click moment (form delay ignored)')
+      : fail('frozen end_time', new Error(JSON.stringify({ got: frozenChk.end_time.toISOString(), want: frozenEndIso })));
+    const { rows: [waMsg] } = await client.query(
+      'select to_mobile, status, caption from public.whatsapp_messages where invoice_id = $1',
+      [end.invoice_id]
+    );
+    waMsg && waMsg.status === 'PENDING' && waMsg.to_mobile === '9876543210' && waMsg.caption.includes(end.invoice_number)
+      ? pass('invoice auto-enqueued for WhatsApp (PENDING, right number, caption)')
+      : fail('whatsapp enqueue', new Error(JSON.stringify(waMsg)));
+    // disabled state → no enqueue
+    await client.query('update public.whatsapp_state set enabled = false');
+    const { rows: [noEnq] } = await client.query(
+      `with inv as (
+         insert into public.invoices (session_id, customer_id, customer_name, customer_mobile, resource_name, subtotal, total_amount)
+         values (null, $1, 'Test', '9876543210', 'PS5 01', 0, 0) returning id
+       ) select (select count(*)::int from public.whatsapp_messages m join inv on m.invoice_id = inv.id) as n`,
+      [cust.id]
+    );
+    noEnq.n === 0 ? pass('auto-send disabled → no queue entry') : fail('whatsapp disabled enqueue', new Error(JSON.stringify(noEnq)));
+    await client.query('update public.whatsapp_state set enabled = true, auto_send = true');
 
     // 11. resource released
     const { rows: [resStatus2] } = await client.query('select current_status from public.resources where id = $1', [ps5.id]);
@@ -341,8 +371,11 @@ async function main() {
     // simulate the scheduled time arriving
     await client.query("update public.sessions set scheduled_start_time = now() - interval '2 seconds' where id = $1", [schedRes.admin_start_session]);
     await client.query('select public.activate_due_sessions()');
-    const { rows: [activated] } = await client.query('select status from public.sessions where id = $1', [schedRes.admin_start_session]);
+    const { rows: [activated] } = await client.query('select status, actual_start_time, scheduled_start_time from public.sessions where id = $1', [schedRes.admin_start_session]);
     activated.status === 'ACTIVE' ? pass('activate_due_sessions promotes due session') : fail('lazy activation');
+    activated.actual_start_time.toISOString() === activated.scheduled_start_time.toISOString()
+      ? pass('late activation backdates billing to the scheduled time')
+      : fail('activation backdating', new Error(JSON.stringify(activated)));
     await client.query('select public.admin_end_session_and_invoice($1, $2, null, 0, null, null, $3)', [schedRes.admin_start_session, JSON.stringify({ duration_seconds: 0, gaming_amount: 0 }), user.id]);
 
     // 17. atomic payments (partial -> overpay rejected -> paid)
@@ -503,6 +536,14 @@ async function main() {
     } catch (e) {
       /permission denied/.test(e.message) ? pass('anon blocked from ledger') : fail('anon ledger', e);
     }
+    for (const tbl of ['whatsapp_state', 'whatsapp_messages']) {
+      try {
+        await client.query(`select * from public.${tbl}`);
+        fail(`anon must not read ${tbl}`);
+      } catch (e) {
+        /permission denied/.test(e.message) ? pass(`anon blocked from ${tbl}`) : fail(`anon ${tbl}`, e);
+      }
+    }
     await client.query('reset role');
 
     console.log('\n\x1b[32mAll schema + functional tests passed.\x1b[0m');
@@ -529,6 +570,25 @@ async function main() {
     pass(`all ${files.length} migrations re-run cleanly after reset`);
     const { rows: [recheck] } = await client.query('select count(*)::int as n from public.resources');
     recheck.n === 3 ? pass('seed data intact after reset + re-run') : fail('post-reset seed');
+
+    // ---- setup.sql paste cycle (exactly what a user pastes into SQL Editor) ----
+    console.log('\nsetup.sql paste cycle:');
+    try {
+      await client.query(reset);
+      const setup = fs.readFileSync(path.join(ROOT, 'supabase', 'setup.sql'), 'utf8');
+      await client.query(setup);
+      pass('setup.sql runs as a single script after reset');
+    } catch (e) {
+      fail('setup.sql', e);
+      return;
+    }
+    const { rows: [setupCheck] } = await client.query(
+      "select (select count(*)::int from public.resources) as res, (select count(*)::int from information_schema.tables where table_schema='public' and table_name in ('whatsapp_state','whatsapp_messages')) as wa"
+    );
+    setupCheck.res === 3 && setupCheck.wa === 2
+      ? pass('setup.sql: seed + whatsapp tables present')
+      : fail('setup.sql completeness', new Error(JSON.stringify(setupCheck)));
+    console.log('\n\x1b[32msetup.sql paste cycle verified.\x1b[0m');
     console.log('\n\x1b[32mReset + re-run cycle verified.\x1b[0m');
   } finally {
     await client.end().catch(() => {});

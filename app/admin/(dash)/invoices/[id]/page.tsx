@@ -160,26 +160,41 @@ export default function InvoiceDetailPage() {
   async function whatsapp() {
     setPdfBusy('whatsapp');
     try {
-      const file = await getPdf();
-      // phones: the share sheet lets staff pick WhatsApp and attaches the file itself
-      if (await shareFile(file)) return;
-      downloadBlob(file, file.name);
-      if (!waDigits) {
-        toast.info('PDF downloaded — attach it in WhatsApp/email');
-        return;
-      }
-      const name = invoice.customer_name?.trim();
-      const msg =
-        `${name ? `Hi ${name}, ` : 'Hi, '}here is your invoice ${invoice.invoice_number} from ${cafe}` +
-        ` (total ${formatMoney(invoice.total_amount, sym)}). Thank you for playing!`;
-      const w = window.open(`https://wa.me/${waDigits}?text=${encodeURIComponent(msg)}`, '_blank', 'noopener,noreferrer');
-      toast.info(
-        w === null
-          ? 'PDF downloaded — pop-up blocked, open WhatsApp and attach it'
-          : 'PDF downloaded — attach it in the WhatsApp chat'
+      // automatic path: queue the invoice PDF for the WhatsApp relay
+      const res = await api.post<{ ok: boolean; relayOnline: boolean }>('/api/admin/whatsapp/send', {
+        invoiceId: invoice.id,
+      });
+      invalidate('/api/admin/whatsapp');
+      toast.success(
+        res.relayOnline
+          ? 'Receipt is being delivered on WhatsApp now ✓'
+          : 'Receipt queued — it goes out when your WhatsApp relay is online'
       );
+      return;
     } catch (err: any) {
-      toast.error(err?.message || 'Could not create the PDF');
+      // no customer number / queue problem → manual share fallback
+      try {
+        const file = await getPdf();
+        // phones: the share sheet lets staff pick WhatsApp and attaches the file itself
+        if (await shareFile(file)) return;
+        downloadBlob(file, file.name);
+        if (!waDigits) {
+          toast.info('PDF downloaded — attach it in WhatsApp/email');
+          return;
+        }
+        const name = invoice.customer_name?.trim();
+        const msg =
+          `${name ? `Hi ${name}, ` : 'Hi, '}here is your invoice ${invoice.invoice_number} from ${cafe}` +
+          ` (total ${formatMoney(invoice.total_amount, sym)}). Thank you for playing!`;
+        const w = window.open(`https://wa.me/${waDigits}?text=${encodeURIComponent(msg)}`, '_blank', 'noopener,noreferrer');
+        toast.info(
+          w === null
+            ? 'PDF downloaded — pop-up blocked, open WhatsApp and attach it'
+            : 'PDF downloaded — attach it in the WhatsApp chat'
+        );
+      } catch (err2: any) {
+        toast.error(err?.message || err2?.message || 'Could not send');
+      }
     } finally {
       setPdfBusy(null);
     }

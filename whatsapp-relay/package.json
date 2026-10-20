@@ -1,0 +1,21 @@
+{
+  "name": "glitchx-whatsapp-relay",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Links your WhatsApp (QR scan) and delivers GlitchX invoice PDFs to customers.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env index.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.18",
+    "qrcode": "^1.5.4",
+    "pino": "^9.5.0",
+    "libsignal": "file:./vendor/libsignal-node-master",
+    "@whiskeysockets/eslint-config": "file:./vendor/eslint-config-main"
+  },
+  "overrides": {
+    "libsignal": "$libsignal",
+    "@whiskeysockets/eslint-config": "$@whiskeysockets/eslint-config"
+  }
+}

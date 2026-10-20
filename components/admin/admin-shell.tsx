@@ -13,7 +13,7 @@ import { AdminProvider, useAdmin } from './admin-context';
 import {
   LayoutDashboard, Gamepad2, CalendarCheck, Users, Monitor, CupSoda,
   Sparkles, Tag, Receipt, CreditCard, BarChart3, Settings, LogOut,
-  Menu, X, UserCircle, Plus, Wallet,
+  Menu, X, UserCircle, Plus, Wallet, MessageCircle,
 } from 'lucide-react';
 
 const NAV = [
@@ -26,6 +26,7 @@ const NAV = [
   { href: '/admin/services', label: 'Games & Services', icon: Sparkles, admin: false },
   { href: '/admin/pricing', label: 'Pricing', icon: Tag, admin: false },
   { href: '/admin/invoices', label: 'Invoices', icon: Receipt, admin: false },
+  { href: '/admin/whatsapp', label: 'WhatsApp', icon: MessageCircle, admin: false, manager: true },
   { href: '/admin/payments', label: 'Payments', icon: CreditCard, admin: false },
   { href: '/admin/finance', label: 'Income & Expenses', icon: Wallet, admin: false, manager: true },
   { href: '/admin/reports', label: 'Reports', icon: BarChart3, admin: false, manager: true },

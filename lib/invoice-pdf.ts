@@ -15,6 +15,8 @@ export type InvoicePdfFormat = 'a4' | 'receipt';
 
 export interface InvoicePdfOptions {
   format?: InvoicePdfFormat;
+  /** pre-loaded logo (server-side); when provided the browser loader is skipped */
+  logo?: { dataUrl: string; w: number; h: number } | null;
 }
 
 type JsPDFDoc = InstanceType<typeof import('jspdf').jsPDF>;
@@ -443,7 +445,7 @@ export async function buildInvoicePdf(
 ): Promise<Blob> {
   const { jsPDF } = await import('jspdf');
   const c = makeCtx(invoice, items, payments, settings);
-  const logoImg = await loadLogo();
+  const logoImg = options.logo !== undefined ? options.logo : await loadLogo();
   const title = clean(`Invoice ${invoice.invoice_number} - ${settings.cafe_name}`);
 
   let doc: JsPDFDoc;

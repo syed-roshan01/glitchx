@@ -292,3 +292,40 @@ tests/                      # billing engine unit tests
   via the API and snapshot every price they depend on.
 - Conflict prevention is enforced by **database constraints**, not application code, so
   races cannot create double-bookings or double sessions.
+
+---
+
+## WhatsApp receipts (automatic invoice delivery)
+
+New invoices are sent to the customer's number as a **PDF on WhatsApp**
+automatically. You link YOUR WhatsApp by scanning a QR in **Admin ? WhatsApp**.
+
+**How the pieces fit**
+
+| Piece | Where | Role |
+|---|---|---|
+| App (this repo) | Vercel | Queues every new invoice; shows the QR + message log |
+| `whatsapp-relay/` | shop PC (runs `npm start`) | Links your WhatsApp (QR), drains the queue, sends the PDFs |
+
+**Setup**
+
+1. **Database** — run `supabase/upgrade-00016-00017.sql` in the Supabase SQL Editor (one paste).
+2. **Secret** — pick a long random `WHATSAPP_RELAY_TOKEN`:
+   - Vercel ? Settings ? Environment Variables (add + redeploy)
+   - `whatsapp-relay/.env` ? `RELAY_TOKEN=<same value>`
+3. **Relay** — on the shop PC:
+   `cd whatsapp-relay && npm install && npm start`
+   (deps are vendored — git is not required)
+4. **Link** — Admin ? WhatsApp shows the scanner QR ? scan with your phone
+   (WhatsApp ? Settings ? Linked Devices ? Link a Device).
+5. **Enable** the toggles on the same page. Every invoice now goes out by itself;
+   the log shows queued/sent/failed with one-click re-send.
+
+**If the power cuts** — nothing is lost. Queued receipts live in the database and
+go out when the relay is back. Sessions are timestamp-based: reopen the app and
+every timer shows the correct elapsed time (it keeps counting through the outage).
+If customers couldn't play during the outage, add a discount on the End screen.
+
+> ?? This uses WhatsApp Web automation (unofficial). Use a **dedicated shop
+> number**, not your personal WhatsApp — heavy automation can get a number
+> banned. Only invoice receipts are sent, paced (default 2.5s apart).

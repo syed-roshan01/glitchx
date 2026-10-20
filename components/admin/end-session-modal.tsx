@@ -5,8 +5,7 @@ import { Modal } from '@/components/ui/modal';
 import { Button } from '@/components/ui/button';
 import { Input, Field } from '@/components/ui/input';
 import { useToast } from '@/components/ui/toast';
-import { api } from '@/lib/api-client';
-import { useNow } from '@/hooks/use-now';
+import { api, serverNow } from '@/lib/api-client';
 import { calculateSessionBreakdown, gamingForTargetTotal, computeBillTotals } from '@/lib/billing/engine';
 import { formatMoney, formatDuration, formatClock } from '@/lib/billing/format';
 import { customerLabel, customerMobile, looksLikeMobile, rateLabel, billingModeText, CustomPriceBadge } from '@/components/admin/pricing-display';
@@ -34,7 +33,10 @@ export function EndSessionModal({
   onEnded: (result: { invoiceId: string; invoiceNumber: string }) => void;
 }) {
   const toast = useToast();
-  const now = useNow(1000);
+  // FROZEN the instant this modal opens ("End session" click): the timer
+  // stops here and the invoice bills exactly this moment — amounts never
+  // drift while the form is open.
+  const frozenEnd = useMemo(() => (open ? serverNow() : null), [open]);
   const [discountType, setDiscountType] = useState<'PERCENT' | 'FIXED' | null>(session.discount_type ?? null);
   const [discountValue, setDiscountValue] = useState<number>(session.discount_value ?? 0);
   const [paymentMethod, setPaymentMethod] = useState<'CASH' | 'UPI' | 'CARD' | 'OTHER' | null>('CASH');
@@ -70,7 +72,7 @@ export function EndSessionModal({
   }, [open, session.discount_type, session.discount_value]);
 
   const breakdown = useMemo(() => {
-    if (!now || !session.actual_start_time) return null;
+    if (!frozenEnd || !session.actual_start_time) return null;
     const discount = discountType && discountValue > 0 ? { type: discountType, value: Number(discountValue) } : null;
     const taxRate = settings.tax_enabled ? settings.tax_rate ?? 0 : 0;
     const itemAmount = items
@@ -92,7 +94,7 @@ export function EndSessionModal({
         paused_at: session.paused_at,
         total_paused_seconds: session.total_paused_seconds,
       },
-      endAt: now,
+      endAt: frozenEnd,
       itemAmount,
       serviceAmount,
       discount,
@@ -103,7 +105,7 @@ export function EndSessionModal({
           ? gamingForTargetTotal({ targetTotal: finalTotal, itemAmount, serviceAmount, discount, taxRate })
           : null,
     });
-  }, [now, session, items, settings, rules, discountType, discountValue, finalTotal]);
+  }, [frozenEnd, session, items, settings, rules, discountType, discountValue, finalTotal]);
 
   // smallest total allowed (food + services after discount/tax, zero time charge)
   const minTotal = useMemo(() => {
@@ -158,6 +160,8 @@ export function EndSessionModal({
       const res = await api.post<{ invoiceId: string; invoiceNumber: string }>(
         `/api/admin/sessions/${session.id}/end`,
         {
+          // the frozen billable end — server + DB bill this exact moment
+          endAt: frozenEnd ? frozenEnd.toISOString() : undefined,
           // A null type means "keep the saved discount" server-side, so an
           // explicit "no discount" is sent as FIXED 0 to clear it.
           ...(discountType && Number(discountValue) > 0
@@ -232,6 +236,11 @@ export function EndSessionModal({
                 <p className="text-[11px] text-muted">
                   {session.actual_start_time ? `from ${formatClock(session.actual_start_time, settings.timezone)}` : ''}
                 </p>
+                {frozenEnd && (
+                  <p className="text-[11px] font-bold text-success">
+                    timer stopped at {formatClock(frozenEnd.toISOString(), settings.timezone)}
+                  </p>
+                )}
               </div>
             </div>
           </div>

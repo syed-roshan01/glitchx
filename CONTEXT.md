@@ -231,7 +231,52 @@ DB exclusion constraints; invoice prices snapshotted (immutable history).
     the user's live running session: 10.6 min → 11 billable min (₹27.50),
     previously 15 min (₹37.50). Takes effect instantly, even mid-session.
 
+- **2026-10-20 (session 7):** WhatsApp receipt automation + timer freezes + reliability fixes.
+  - **Timer bug** ("when i end session the timer should stop not untill i generate
+    the invoice" / "sometimes it doesn't run properly"): end-session amounts kept
+    ticking while the form was open and the server billed its own `now()` at
+    confirm — the shown total could differ from the invoice, and confirms slower
+    than 60 s tripped `BILLING_MISMATCH` (the end failed silently; the timer ran
+    until a retry finally generated the invoice). FIXED with a **frozen end
+    moment** (00017 `p_end_at`, clamped to [start, now]): the clock stops at the
+    "End session" click, the modal shows "timer stopped at HH:MM:SS", and the
+    route + RPC bill that exact instant. First draft of 00017 rebuilt 00010's
+    function and regressed 00015's walk-in name fixes — caught by the DB suite;
+    final 00017 is 00015's body + the frozen end.
+  - **Client clock skew** could freeze the live timer at 00:00 (elapsed clamps at
+    0) or inflate it. FIXED: `useNow` anchors to the **server clock** via API
+    `Date` headers (NTP-style midpoint) and snaps correct on tab refocus.
+  - **WhatsApp receipts** (owner: "connect my whatsapp… send the invoice in pdf"):
+    - DB 00016: `whatsapp_state` (config + relay heartbeat + QR payload),
+      `whatsapp_messages` (queue/log), invoices-insert trigger auto-enqueues when
+      enabled + a mobile exists; `activate_due_sessions` now **backdates** late
+      activations to the SCHEDULED time (power-cut story).
+    - API: `/api/admin/whatsapp` (status/config), `/send`, `/[id]` retry/cancel +
+      relay-token `/api/relay/whatsapp/{state,queue,report,pdf}` (PDF rendered
+      server-side with the logo).
+    - UI `/admin/whatsapp` (nav MANAGER+): QR linking, relay/phone status,
+      toggles, message log with re-send. Invoice page "WhatsApp" button queues
+      the PDF first (manual wa.me/share flow as fallback).
+    - Relay `whatsapp-relay/` (Baileys multi-device): boots → WhatsApp handshake
+      → linking QR in ~1 s (smoke-tested here). Git-pinned deps are **vendored**
+      (`vendor/` + npm overrides) so `npm install` needs no git on the shop PC.
+      Unofficial automation — ban risk noted everywhere; use a dedicated number.
+  - Verification: typecheck ✓, 34/34 billing tests ✓, full DB suite (frozen end,
+    enqueue trigger, backdating, anon blocks, setup.sql paste cycle) ✓, live
+    relay + PDF endpoint + token auth ✓ (`.pgtest/wa-chain-test.cjs`).
+  - **PENDING: run `supabase/upgrade-00016-00017.sql` in the Supabase SQL Editor** —
+    the live DB still lacks 00016/00017 (`whatsapp_messages` missing in
+    PostgREST). Then: add `WHATSAPP_RELAY_TOKEN` to Vercel env (= the value in
+    `.env.local`), `npm start` the relay on the shop PC, scan the QR in
+    Admin → WhatsApp, enable the toggles.
+
 ## 9. Known issues / pending
+
+0. **WhatsApp go-live (session 7 leftovers, in order):**
+   1. Run `supabase/upgrade-00016-00017.sql` in the Supabase SQL Editor (one paste).
+   2. Add `WHATSAPP_RELAY_TOKEN` to Vercel env (= the value in `.env.local`) + redeploy.
+   3. On the shop PC: `cd whatsapp-relay && npm install && npm start`.
+   4. Admin → WhatsApp → scan the QR → enable the toggles. Done.
 
 1. ~~Apply 00014 to live Supabase~~ **DONE — verified applied 2026-10-06** (session 4
    probes). Still worth reviewing `profiles` for unknown self-signed-up accounts from

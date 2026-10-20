@@ -1,7 +1,7 @@
 -- =============================================================
 -- GlitchX Gaming Cafe — COMPLETE SUPABASE SETUP SCRIPT
 --
--- This file is the concatenation of supabase/migrations/00001-00015
+-- This file is the concatenation of supabase/migrations/00001-00016
 -- (do not edit here — edit the migrations and regenerate).
 --
 -- HOW TO USE
@@ -22,7 +22,7 @@
 -- FILE: 00001_extensions.sql
 --------------------------------------------------------------------
 -- =============================================================
--- 00001 — Extensions
+-- 00001 â€” Extensions
 -- =============================================================
 create extension if not exists pgcrypto;
 create extension if not exists btree_gist;
@@ -30,7 +30,7 @@ create extension if not exists btree_gist;
 -- FILE: 00002_profiles.sql
 --------------------------------------------------------------------
 -- =============================================================
--- 00002 — Profiles, roles and core helpers
+-- 00002 â€” Profiles, roles and core helpers
 -- =============================================================
 
 create table public.profiles (
@@ -134,7 +134,7 @@ create policy "profiles: admin full control"
 -- FILE: 00003_settings.sql
 --------------------------------------------------------------------
 -- =============================================================
--- 00003 — Cafe settings (single row)
+-- 00003 â€” Cafe settings (single row)
 -- =============================================================
 
 create table public.settings (
@@ -146,7 +146,7 @@ create table public.settings (
   email text,
   gstin text,
   currency text not null default 'INR',
-  currency_symbol text not null default '₹',
+  currency_symbol text not null default 'â‚¹',
   timezone text not null default 'Asia/Kolkata',
   invoice_prefix text not null default 'INV',
   tax_enabled boolean not null default false,
@@ -188,17 +188,17 @@ create policy "settings: admin update"
 -- FILE: 00004_catalog.sql
 --------------------------------------------------------------------
 -- =============================================================
--- 00004 — Catalog: pricing plans, resources, pricing rules,
+-- 00004 â€” Catalog: pricing plans, resources, pricing rules,
 --          services and items
 -- =============================================================
 
 -- -------------------------------------------------------------
 -- Pricing plans (rate cards per resource type)
 -- billing_type:
---   HOURLY      — price is the hourly rate, billed per minute
---   PER_MINUTE  — price is the per-minute rate
---   FIXED       — flat price for the session
---   PACKAGE     — flat price for up to duration_minutes,
+--   HOURLY      â€” price is the hourly rate, billed per minute
+--   PER_MINUTE  â€” price is the per-minute rate
+--   FIXED       â€” flat price for the session
+--   PACKAGE     â€” flat price for up to duration_minutes,
 --                 extra time prorated at the package rate
 -- -------------------------------------------------------------
 create table public.pricing_plans (
@@ -223,8 +223,8 @@ create trigger pricing_plans_updated_at
 
 -- -------------------------------------------------------------
 -- Resources (stations: PS5s, pool tables, PCs, VR, ...)
--- status       — admin-managed base state (ACTIVE/MAINTENANCE/INACTIVE)
--- current_status — DERIVED display state (AVAILABLE/BUSY/RESERVED/
+-- status       â€” admin-managed base state (ACTIVE/MAINTENANCE/INACTIVE)
+-- current_status â€” DERIVED display state (AVAILABLE/BUSY/RESERVED/
 --                  MAINTENANCE) maintained by trigger from live
 --                  sessions and bookings. Never set manually.
 -- -------------------------------------------------------------
@@ -319,7 +319,7 @@ create trigger items_updated_at
 -- RLS
 -- -------------------------------------------------------------
 alter table public.pricing_plans enable row level security;
--- Public visitors need active plans to show "₹100/hour" on the booking page.
+-- Public visitors need active plans to show "â‚¹100/hour" on the booking page.
 create policy "pricing_plans: public read active"
   on public.pricing_plans for select
   using (active);
@@ -392,7 +392,7 @@ create policy "items: admin delete"
 -- FILE: 00005_customers.sql
 --------------------------------------------------------------------
 -- =============================================================
--- 00005 — Customers
+-- 00005 â€” Customers
 -- =============================================================
 
 create table public.customers (
@@ -415,7 +415,7 @@ create trigger customers_updated_at
   for each row execute function public.set_updated_at();
 
 -- -------------------------------------------------------------
--- RLS: staff/admin only. Public visitors never touch this table —
+-- RLS: staff/admin only. Public visitors never touch this table â€”
 -- public bookings capture name+mobile snapshots via RPC instead.
 -- -------------------------------------------------------------
 alter table public.customers enable row level security;
@@ -440,7 +440,7 @@ create policy "customers: admin delete"
 -- FILE: 00006_sessions.sql
 --------------------------------------------------------------------
 -- =============================================================
--- 00006 — Sessions and session line items
+-- 00006 â€” Sessions and session line items
 -- =============================================================
 
 create table public.sessions (
@@ -481,7 +481,7 @@ create index sessions_customer_idx on public.sessions(customer_id);
 create index sessions_created_at_idx on public.sessions(created_at desc);
 
 -- CRITICAL: at most ONE live (ACTIVE/PAUSED) session per resource.
--- Enforced at the database level — immune to race conditions.
+-- Enforced at the database level â€” immune to race conditions.
 create unique index sessions_one_live_per_resource
   on public.sessions(resource_id)
   where status in ('ACTIVE', 'PAUSED');
@@ -496,7 +496,7 @@ alter table public.sessions
   where (status = 'SCHEDULED' and scheduled_start_time is not null and expected_end_time is not null);
 
 -- -------------------------------------------------------------
--- Session line items — prices are SNAPSHOTTED so later catalog
+-- Session line items â€” prices are SNAPSHOTTED so later catalog
 -- price changes never alter historical bills/invoices.
 -- -------------------------------------------------------------
 create table public.session_items (
@@ -553,7 +553,7 @@ create policy "session_items: admin delete"
 -- FILE: 00007_bookings_waitlist.sql
 --------------------------------------------------------------------
 -- =============================================================
--- 00007 — Bookings and waitlist
+-- 00007 â€” Bookings and waitlist
 -- =============================================================
 
 create table public.bookings (
@@ -687,7 +687,7 @@ create trigger waitlist_updated_at
   for each row execute function public.set_updated_at();
 
 -- -------------------------------------------------------------
--- RLS: no direct anon access — public booking/waitlist creation
+-- RLS: no direct anon access â€” public booking/waitlist creation
 -- goes through SECURITY DEFINER RPCs (00010) that validate input.
 -- -------------------------------------------------------------
 alter table public.bookings enable row level security;
@@ -725,7 +725,7 @@ create policy "waitlist: admin delete"
 -- FILE: 00008_invoices_payments.sql
 --------------------------------------------------------------------
 -- =============================================================
--- 00008 — Invoices, invoice items and payments
+-- 00008 â€” Invoices, invoice items and payments
 -- =============================================================
 
 create sequence public.invoice_number_seq start 1;
@@ -826,7 +826,7 @@ create trigger invoices_updated_at
   for each row execute function public.set_updated_at();
 
 -- -------------------------------------------------------------
--- RLS: no deletes ever — historical invoices are immutable via
+-- RLS: no deletes ever â€” historical invoices are immutable via
 -- the API; only admins may VOID. Payments are insert/update only.
 -- -------------------------------------------------------------
 alter table public.invoices enable row level security;
@@ -867,9 +867,9 @@ create policy "payments: admin update (refund)"
 -- FILE: 00009_audit.sql
 --------------------------------------------------------------------
 -- =============================================================
--- 00009 — Audit logs
+-- 00009 â€” Audit logs
 -- Written exclusively by the server (service role). No client
--- INSERT/UPDATE/DELETE policies — the API records admin actions.
+-- INSERT/UPDATE/DELETE policies â€” the API records admin actions.
 -- =============================================================
 
 create table public.audit_logs (
@@ -895,7 +895,7 @@ create policy "audit_logs: admin read"
 -- FILE: 00010_functions.sql
 --------------------------------------------------------------------
 -- =============================================================
--- 00010 — Server functions (RPC layer)
+-- 00010 â€” Server functions (RPC layer)
 --
 -- Public functions (anon-callable) are strictly validated
 -- SECURITY DEFINER functions. Admin functions are revoked from
@@ -1334,7 +1334,7 @@ as $$
   );
 $$;
 
--- Claim the ADMIN role for the caller — only works while no admin
+-- Claim the ADMIN role for the caller â€” only works while no admin
 -- exists (first-time onboarding). Safe against races via advisory lock.
 create or replace function public.claim_first_admin()
 returns boolean
@@ -1354,7 +1354,7 @@ end;
 $$;
 
 -- =============================================================
--- ADMIN / SERVER functions below — callable only by service role.
+-- ADMIN / SERVER functions below â€” callable only by service role.
 -- =============================================================
 
 -- -------------------------------------------------------------
@@ -1661,7 +1661,7 @@ end;
 $$;
 
 -- -------------------------------------------------------------
--- END SESSION — the atomic billing transaction.
+-- END SESSION â€” the atomic billing transaction.
 --
 -- p_billing = { duration_seconds, gaming_amount } computed by the
 -- TypeScript billing engine from DB timestamps (single source of
@@ -1814,7 +1814,7 @@ begin
     invoice_id, item_type, name_snapshot, unit_price, quantity, total_price, sort_order
   )
   select v_invoice_id, 'GAMING',
-         coalesce(v_session.pricing_plan_snapshot ->> 'name', 'Gaming') || ' — ' || v_resource.name,
+         coalesce(v_session.pricing_plan_snapshot ->> 'name', 'Gaming') || ' â€” ' || v_resource.name,
          v_gaming, 1, v_gaming, 0
   where v_gaming > 0;
 
@@ -1862,7 +1862,7 @@ end;
 $$;
 
 -- -------------------------------------------------------------
--- Check in a booking → start the session now
+-- Check in a booking â†’ start the session now
 -- -------------------------------------------------------------
 create or replace function public.admin_check_in_booking(
   p_booking_id uuid,
@@ -2095,7 +2095,7 @@ revoke execute on function public.booking_slot_is_free(uuid, timestamptz, timest
 -- FILE: 00011_realtime.sql
 --------------------------------------------------------------------
 -- =============================================================
--- 00011 — Realtime publication
+-- 00011 â€” Realtime publication
 -- Admin dashboards and the public booking page subscribe to
 -- these tables. Row-level security applies to subscriptions.
 -- Idempotent: safe to re-run.
@@ -2135,18 +2135,18 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 -- FILE: 00012_seed.sql
 --------------------------------------------------------------------
 -- =============================================================
--- 00012 — Seed data (idempotent)
--- Resources: 2× PS5 + 1 Pool Table. Pricing: PS5 ₹100/hr,
--- Pool ₹300/hr. Starter items, services and default settings.
+-- 00012 â€” Seed data (idempotent)
+-- Resources: 2Ã— PS5 + 1 Pool Table. Pricing: PS5 â‚¹100/hr,
+-- Pool â‚¹300/hr. Starter items, services and default settings.
 -- =============================================================
 
 -- Pricing plans
 insert into public.pricing_plans (resource_type, name, billing_type, price, duration_minutes)
 select * from (values
   ('PLAYSTATION', 'PS5 Hourly', 'HOURLY', 100.00, null::integer),
-  ('PLAYSTATION', 'PS5 — 2 Hour Package', 'PACKAGE', 180.00, 120),
+  ('PLAYSTATION', 'PS5 â€” 2 Hour Package', 'PACKAGE', 180.00, 120),
   ('POOL', 'Pool Hourly', 'HOURLY', 300.00, null::integer),
-  ('POOL', 'Pool — 30 Minutes', 'PACKAGE', 150.00, 30)
+  ('POOL', 'Pool â€” 30 Minutes', 'PACKAGE', 150.00, 30)
 ) as seed(resource_type, name, billing_type, price, duration_minutes)
 where not exists (
   select 1 from public.pricing_plans p
@@ -2156,8 +2156,8 @@ where not exists (
 -- Resources
 insert into public.resources (name, type, description)
 select * from (values
-  ('PS5 01', 'PLAYSTATION', 'PlayStation 5 station — 4K TV, dual controllers'),
-  ('PS5 02', 'PLAYSTATION', 'PlayStation 5 station — 4K TV, dual controllers'),
+  ('PS5 01', 'PLAYSTATION', 'PlayStation 5 station â€” 4K TV, dual controllers'),
+  ('PS5 02', 'PLAYSTATION', 'PlayStation 5 station â€” 4K TV, dual controllers'),
   ('Pool Table', 'POOL', 'Full-size pool table with cues and balls')
 ) as seed(name, type, description)
 where not exists (select 1 from public.resources r where r.name = seed.name);
@@ -2201,13 +2201,13 @@ where not exists (select 1 from public.services s where s.name = seed.name);
 -- FILE: 00013_grants.sql
 --------------------------------------------------------------------
 -- =============================================================
--- 00013 — Explicit table ACL grants
+-- 00013 â€” Explicit table ACL grants
 --
 -- Supabase projects grant anon/authenticated/service_role access
 -- to public-schema tables via DEFAULT PRIVILEGES. We restate them
 -- explicitly so the schema is self-contained (works identically
 -- on Supabase, vanilla PostgreSQL, and CI). RLS remains the row
--- security boundary — these grants only open the tables to
+-- security boundary â€” these grants only open the tables to
 -- policy evaluation.
 -- =============================================================
 
@@ -2266,7 +2266,7 @@ grant all on all sequences in schema public to service_role;
 -- FILE: 00014_security_payments_booking.sql
 --------------------------------------------------------------------
 -- =============================================================
--- 00014 — Security hardening, atomic payments, booking UX RPCs
+-- 00014 â€” Security hardening, atomic payments, booking UX RPCs
 --
 --  1. Admin-only functions were still executable by anon via the
 --     default PUBLIC execute grant (revoking from anon/authenticated
@@ -2547,12 +2547,12 @@ grant execute on function public.mobile_digits(text) to anon, authenticated, ser
 -- FILE: 00015_quick_sessions_pricing_ledger.sql
 --------------------------------------------------------------------
 -- =============================================================
--- 00015 — Quick-start sessions, custom session prices, walk-ins,
+-- 00015 â€” Quick-start sessions, custom session prices, walk-ins,
 --          consistent estimates, income & expense ledger
 --
 --  * Sessions can start without customer details (customer_id is
 --    nullable; optional guest_name / guest_mobile). Details can be
---    added later — including after the invoice was issued.
+--    added later â€” including after the invoice was issued.
 --  * Staff can override the price for a single session (snapshot
 --    flagged custom; peak rules never override it) and change it
 --    while the session runs.
@@ -2971,7 +2971,7 @@ begin
     invoice_id, item_type, name_snapshot, unit_price, quantity, total_price, sort_order
   )
   select v_invoice_id, 'GAMING',
-         coalesce(v_session.pricing_plan_snapshot ->> 'name', 'Gaming') || ' — ' || v_resource.name,
+         coalesce(v_session.pricing_plan_snapshot ->> 'name', 'Gaming') || ' â€” ' || v_resource.name,
          v_gaming, 1, v_gaming, 0
   where v_gaming > 0;
 
@@ -3174,3 +3174,191 @@ grant execute on function public.estimate_booking_amount(uuid, integer) to anon,
 
 -- PostgREST: pick up the new function signatures immediately
 notify pgrst, 'reload schema';
+
+-- FILE: 00016_whatsapp_invoice_relay.sql
+--------------------------------------------------------------------
+-- =============================================================
+-- 00016 â€” WhatsApp invoice relay + scheduled-session backdating
+--
+--  1. activate_due_sessions(): a scheduled session that becomes due
+--     (page load after an outage/power cut, etc.) is backdated to its
+--     SCHEDULED time for billing, not stamped at activation time.
+--  2. whatsapp_state: single-row config + relay heartbeat (connection
+--     state, linked phone number, current QR payload).
+--  3. whatsapp_messages: the send queue / log. New invoices are
+--     auto-enqueued by trigger when auto-send is on and the customer
+--     has a mobile number. The local relay (whatsapp-relay/) drains
+--     this queue and delivers invoice PDFs over WhatsApp (WhatsApp
+--     Web / multi-device protocol). Queued messages survive power
+--     cuts and are sent when the relay comes back online.
+--
+-- Safe to run once on the live database (idempotent where possible).
+-- =============================================================
+
+-- -------------------------------------------------------------
+-- 1. Scheduled sessions bill from their scheduled time
+-- -------------------------------------------------------------
+create or replace function public.activate_due_sessions()
+returns integer
+language plpgsql security definer set search_path = public
+as $$
+declare
+  v_count integer := 0;
+  s record;
+begin
+  for s in
+    select id, resource_id, scheduled_start_time from public.sessions
+    where status = 'SCHEDULED'
+      and scheduled_start_time is not null
+      and scheduled_start_time <= now()
+  loop
+    if not exists (
+      select 1 from public.sessions
+      where resource_id = s.resource_id
+        and status in ('ACTIVE', 'PAUSED')
+        and id <> s.id
+    ) then
+      update public.sessions
+      set status = 'ACTIVE',
+          -- backdate to the scheduled moment so a late activation
+          -- (outage, nobody watching) never loses billable time
+          actual_start_time = coalesce(actual_start_time, s.scheduled_start_time, now()),
+          updated_at = now()
+      where id = s.id;
+      v_count := v_count + 1;
+    end if;
+  end loop;
+  return v_count;
+end;
+$$;
+
+-- -------------------------------------------------------------
+-- 2. Relay state + config (single row)
+-- -------------------------------------------------------------
+create table if not exists public.whatsapp_state (
+  id text primary key default 'default',
+  enabled boolean not null default false,
+  auto_send boolean not null default true,
+  send_delay_ms integer not null default 2500 check (send_delay_ms between 0 and 60000),
+  connected boolean not null default false,
+  phone text,
+  qr text,
+  last_seen timestamptz,
+  last_error text,
+  updated_at timestamptz not null default now()
+);
+
+insert into public.whatsapp_state (id) values ('default')
+on conflict (id) do nothing;
+
+drop trigger if exists whatsapp_state_updated_at on public.whatsapp_state;
+create trigger whatsapp_state_updated_at
+  before update on public.whatsapp_state
+  for each row execute function public.set_updated_at();
+
+-- -------------------------------------------------------------
+-- 3. Outgoing message queue / log
+-- -------------------------------------------------------------
+create table if not exists public.whatsapp_messages (
+  id uuid primary key default gen_random_uuid(),
+  invoice_id uuid references public.invoices(id) on delete cascade,
+  to_mobile text not null check (length(to_mobile) between 7 and 20),
+  caption text,
+  status text not null default 'PENDING'
+    check (status in ('PENDING', 'SENT', 'FAILED')),
+  attempts integer not null default 0,
+  last_error text,
+  wa_message_id text,
+  created_at timestamptz not null default now(),
+  sent_at timestamptz,
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists whatsapp_messages_status_idx
+  on public.whatsapp_messages(status, created_at);
+create index if not exists whatsapp_messages_invoice_idx
+  on public.whatsapp_messages(invoice_id);
+
+drop trigger if exists whatsapp_messages_updated_at on public.whatsapp_messages;
+create trigger whatsapp_messages_updated_at
+  before update on public.whatsapp_messages
+  for each row execute function public.set_updated_at();
+
+-- -------------------------------------------------------------
+-- 4. Auto-enqueue new invoices
+-- -------------------------------------------------------------
+create or replace function public.enqueue_invoice_whatsapp()
+returns trigger
+language plpgsql security definer set search_path = public
+as $$
+declare
+  v_enabled boolean;
+  v_auto boolean;
+  v_mobile text;
+  v_cafe text;
+begin
+  select enabled, auto_send into v_enabled, v_auto
+  from public.whatsapp_state where id = 'default';
+  if not coalesce(v_enabled, false) or not coalesce(v_auto, false) then
+    return new;
+  end if;
+
+  -- customer mobile, falling back to the session's walk-in guest mobile
+  select coalesce(
+    nullif(public.mobile_digits(c.mobile), ''),
+    nullif(public.mobile_digits(s.guest_mobile), '')
+  )
+  into v_mobile
+  from (select 1) _
+  left join public.customers c on c.id = new.customer_id
+  left join public.sessions s on s.id = new.session_id;
+  if v_mobile is null then
+    return new;
+  end if;
+
+  select cafe_name into v_cafe from public.settings where id = 'default';
+
+  insert into public.whatsapp_messages (invoice_id, to_mobile, caption)
+  values (
+    new.id,
+    v_mobile,
+    format(
+      E'Thank you for visiting %s!\n\nReceipt *%s* Â· Total %s%s',
+      coalesce(v_cafe, 'the cafe'),
+      new.invoice_number,
+      coalesce(to_char(new.total_amount, 'FM999990.00'), '0'),
+      case when new.status = 'PAID' then E'\nPaid in full âœ“' else '' end
+    )
+  );
+  return new;
+end;
+$$;
+revoke execute on function public.enqueue_invoice_whatsapp() from public, anon, authenticated;
+
+drop trigger if exists invoices_enqueue_whatsapp on public.invoices;
+create trigger invoices_enqueue_whatsapp
+  after insert on public.invoices
+  for each row execute function public.enqueue_invoice_whatsapp();
+
+-- -------------------------------------------------------------
+-- 5. Grants + RLS (mirrors 00015 ledger_entries)
+-- -------------------------------------------------------------
+alter table public.whatsapp_state enable row level security;
+alter table public.whatsapp_messages enable row level security;
+
+drop policy if exists "whatsapp_state: managers read" on public.whatsapp_state;
+create policy "whatsapp_state: managers read"
+  on public.whatsapp_state for select
+  using (public.my_role() in ('ADMIN', 'MANAGER'));
+
+drop policy if exists "whatsapp_messages: managers read" on public.whatsapp_messages;
+create policy "whatsapp_messages: managers read"
+  on public.whatsapp_messages for select
+  using (public.my_role() in ('ADMIN', 'MANAGER'));
+
+grant select on public.whatsapp_state to authenticated;
+grant all on public.whatsapp_state to service_role;
+grant select on public.whatsapp_messages to authenticated;
+grant all on public.whatsapp_messages to service_role;
+revoke all on public.whatsapp_state from anon;
+revoke all on public.whatsapp_messages from anon;

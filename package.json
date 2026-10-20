@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "next dev",
     "dev:inprocess": "node scripts/dev-server.cjs",
+    "whatsapp:relay": "cd whatsapp-relay && npm start",
     "build": "next build",
     "start": "next start",
     "test": "node --experimental-strip-types --test tests/billing-engine.test.ts",

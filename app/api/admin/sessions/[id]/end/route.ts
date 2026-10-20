@@ -103,6 +103,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }
   }
 
+  // ---- frozen billable end (captured at the "End session" click) ----
+  const parsedEnd = input.endAt ? new Date(input.endAt) : null;
+  const frozenEnd = parsedEnd && !Number.isNaN(parsedEnd.getTime()) ? parsedEnd : new Date();
+
   const breakdown = calculateSessionBreakdown({
     gamingOverride,
     plan: session.pricing_plan_snapshot,
@@ -117,7 +121,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       paused_at: session.paused_at,
       total_paused_seconds: session.total_paused_seconds,
     },
-    endAt: new Date(),
+    endAt: frozenEnd,
     itemAmount,
     serviceAmount,
     discount,
@@ -136,6 +140,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     p_payment_method: input.paymentMethod ?? null,
     p_payment_reference: input.paymentReference ?? null,
     p_acting_user: userId,
+    // the DB bills the SAME frozen moment as the confirmation screen
+    p_end_at: frozenEnd.toISOString(),
   });
   if (error) return jsonError(friendlyError(error), 400);
 

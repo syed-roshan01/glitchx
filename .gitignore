@@ -48,3 +48,9 @@ next-env.d.ts
 
 # local AI-tooling state (e.g. Claude Code launch configs)
 /.claude/
+
+# whatsapp relay (installed per-machine; the linked WhatsApp session is private)
+/whatsapp-relay/node_modules/
+/whatsapp-relay/session/
+/whatsapp-relay/.env
+/whatsapp-relay/.npm-cache/
