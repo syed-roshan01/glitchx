@@ -30,5 +30,10 @@ export async function GET(req: NextRequest) {
       caption: m.caption,
       filename: `${String(m.invoices?.invoice_number ?? 'receipt').replace(/[^\w.-]+/g, '_')}.pdf`,
     })),
+    _debug: {
+      computedAt: new Date().toISOString(),
+      msgsError: msgs.error ? { message: msgs.error.message, code: (msgs.error as any).code, details: (msgs.error as any).details } : null,
+      stateError: state.error ? { message: state.error.message, code: (state.error as any).code, details: (state.error as any).details } : null,
+    },
   });
 }
