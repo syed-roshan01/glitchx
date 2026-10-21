@@ -264,11 +264,22 @@ DB exclusion constraints; invoice prices snapshotted (immutable history).
   - Verification: typecheck ✓, 34/34 billing tests ✓, full DB suite (frozen end,
     enqueue trigger, backdating, anon blocks, setup.sql paste cycle) ✓, live
     relay + PDF endpoint + token auth ✓ (`.pgtest/wa-chain-test.cjs`).
-  - **PENDING: run `supabase/upgrade-00016-00017.sql` in the Supabase SQL Editor** —
-    the live DB still lacks 00016/00017 (`whatsapp_messages` missing in
-    PostgREST). Then: add `WHATSAPP_RELAY_TOKEN` to Vercel env (= the value in
-    `.env.local`), `npm start` the relay on the shop PC, scan the QR in
-    Admin → WhatsApp, enable the toggles.
+  - **ROOT-CAUSE FIX (late session 7): "invoice stuck in queue" + all flaky
+    timer/read bugs** — Next.js PATCHES global `fetch` and its data cache
+    **freezes GET responses inside API routes**; supabase-js calls that fetch
+    without a `cache` option, so every API query was served from a SNAPSHOT of
+    its first execution (queue frozen pre-SQL-empty; whatsapp_state frozen
+    pre-QR-link; session rows frozen → "timer sometimes doesn't run"). Proof:
+    same function + same moment — raw fetch with `cache:'no-store'` saw live
+    rows while supabase-js saw the 08:52 world. FIX: `lib/supabase/no-store-fetch.ts`
+    wraps fetch with `cache:'no-store'` and is passed via `global: { fetch }`
+    in all three client factories (admin/server/browser). Stuck receipt
+    INV-2026-00068 delivered seconds after deploy. If a query ever looks
+    stale again, suspect fetch caching FIRST.
+  - Go-live checklist 2026-10-21: SQL upgrade ✓ applied, `WHATSAPP_RELAY_TOKEN`
+    in Vercel ✓, relay running (this PC is the relay PC; `setup-relay.bat` one-click
+    sets up any other PC incl. auto-start at login) ✓, QR scanned ✓
+    (WhatsApp 917353185502 linked), toggles enabled ✓, first receipt delivered ✓.
 
 ## 9. Known issues / pending
 
