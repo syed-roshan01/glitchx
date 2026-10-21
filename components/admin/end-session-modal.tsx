@@ -9,8 +9,9 @@ import { api, serverNow } from '@/lib/api-client';
 import { calculateSessionBreakdown, gamingForTargetTotal, computeBillTotals } from '@/lib/billing/engine';
 import { formatMoney, formatDuration, formatClock } from '@/lib/billing/format';
 import { customerLabel, customerMobile, looksLikeMobile, rateLabel, billingModeText, CustomPriceBadge } from '@/components/admin/pricing-display';
+import { buildReceiptText, whatsappReceiptUrl } from '@/lib/whatsapp/receipt-text';
 import type { CafeSettings, PricingRule, Session, SessionItem } from '@/types';
-import { Banknote, Smartphone, CreditCard, Wallet, Percent, IndianRupee, User, Phone, Pencil, RotateCcw } from 'lucide-react';
+import { Banknote, Smartphone, CreditCard, Wallet, Percent, IndianRupee, User, Phone, Pencil, RotateCcw, CheckCircle2, MessageCircle, FileText } from 'lucide-react';
 
 /** End-session confirmation with the live final bill, discount and
  *  payment method. Amounts come from the billing engine; the server
@@ -30,13 +31,15 @@ export function EndSessionModal({
   rules: PricingRule[];
   open: boolean;
   onClose: () => void;
-  onEnded: (result: { invoiceId: string; invoiceNumber: string }) => void;
+  onEnded: (result: { invoiceId: string; invoiceNumber: string }, opts?: { navigate?: boolean }) => void;
 }) {
   const toast = useToast();
   // FROZEN the instant this modal opens ("End session" click): the timer
   // stops here and the invoice bills exactly this moment — amounts never
   // drift while the form is open.
   const frozenEnd = useMemo(() => (open ? serverNow() : null), [open]);
+  // successful end → receipt panel with the one-click WhatsApp button
+  const [done, setDone] = useState<{ invoiceId: string; invoiceNumber: string } | null>(null);
   const [discountType, setDiscountType] = useState<'PERCENT' | 'FIXED' | null>(session.discount_type ?? null);
   const [discountValue, setDiscountValue] = useState<number>(session.discount_value ?? 0);
   const [paymentMethod, setPaymentMethod] = useState<'CASH' | 'UPI' | 'CARD' | 'OTHER' | null>('CASH');
@@ -54,6 +57,7 @@ export function EndSessionModal({
     if (!open) return;
     setFinalTotal(null);
     setEditingTotal(false);
+    setDone(null);
   }, [open]);
 
   // prefill customer details from the session every time the modal opens
@@ -176,7 +180,7 @@ export function EndSessionModal({
         }
       );
       toast.success(`Invoice ${res.invoiceNumber} generated`);
-      onEnded(res);
+      setDone(res);
     } catch (e: any) {
       toast.error(e.message);
     } finally {
@@ -184,8 +188,53 @@ export function EndSessionModal({
     }
   }
 
-  const methodButton = (id: 'CASH' | 'UPI' | 'CARD' | 'OTHER', icon: React.ReactNode, label: string) => (
-    <button
+  // one-click WhatsApp receipt (prefilled message, framed like the invoice)
+  const doneLink = useMemo(() => {
+    if (!done || !breakdown) return null;
+    const plan = session.pricing_plan_snapshot;
+    const text = buildReceiptText(
+      {
+        invoiceNumber: done.invoiceNumber,
+        issuedAt: frozenEnd ?? undefined,
+        customerName: name.trim() || customerLabel(session),
+        resourceName: session.resource_name,
+        sessionStart: session.actual_start_time,
+        sessionEnd: frozenEnd,
+        durationSeconds: breakdown.elapsedSeconds,
+        sessionLines: breakdown.computedGamingAmount > 0
+          ? [
+              {
+                name: plan
+                  ? `${plan.name ?? 'Session'} · ${rateLabel(plan, sym)}`
+                  : 'Gaming session',
+                amount: breakdown.computedGamingAmount,
+              },
+            ]
+          : [],
+        itemLines: (items ?? []).map((i) => ({
+          name: i.name_snapshot,
+          quantity: i.quantity,
+          amount: i.total_price,
+        })),
+        subtotal: breakdown.subtotal,
+        discountAmount: breakdown.discountAmount,
+        taxLabel: settings.tax_enabled ? settings.tax_name : null,
+        taxAmount: breakdown.taxAmount,
+        total: finalTotal ?? breakdown.total,
+        totalAdjusted: finalTotal != null,
+        paid: !!paymentMethod,
+        paymentMethod,
+      },
+      {
+        cafeName: settings.cafe_name,
+        currency: sym,
+        timezone: settings.timezone,
+      }
+    );
+    return whatsappReceiptUrl(text, mobile.trim() || customerMobile(session));
+  }, [done, breakdown, session, items, settings, sym, name, mobile, finalTotal, paymentMethod, frozenEnd]);
+
+  const methodButton = (id: 'CASH' | 'UPI' | 'CARD' | 'OTHER', icon: React.ReactNode, label: string) => (    <button
       key={id}
       type="button"
       onClick={() => setPaymentMethod(id)}
@@ -205,20 +254,59 @@ export function EndSessionModal({
     <Modal
       open={open}
       onClose={onClose}
-      title="End session & generate invoice"
+      title={done ? 'Session ended ✓' : 'End session & generate invoice'}
       size="md"
       footer={
-        <div className="flex justify-end gap-2">
-          <button className="h-10 rounded-xl px-4 text-sm font-semibold text-muted hover:bg-surface-2" onClick={onClose}>
-            Cancel
-          </button>
-          <Button variant="success" loading={busy} onClick={confirm}>
-            End &amp; Generate Invoice
-          </Button>
-        </div>
+        done ? (
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => onEnded(done)}>
+              <FileText className="h-4 w-4" /> View invoice
+            </Button>
+            <Button variant="success" onClick={() => onEnded(done, { navigate: false })}>
+              Done
+            </Button>
+          </div>
+        ) : (
+          <div className="flex justify-end gap-2">
+            <button className="h-10 rounded-xl px-4 text-sm font-semibold text-muted hover:bg-surface-2" onClick={onClose}>
+              Cancel
+            </button>
+            <Button variant="success" loading={busy} onClick={confirm}>
+              End &amp; Generate Invoice
+            </Button>
+          </div>
+        )
       }
     >
-      {!breakdown ? (
+      {done ? (
+        <div className="py-2 text-center">
+          <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-success/15">
+            <CheckCircle2 className="h-7 w-7 text-success" />
+          </div>
+          <p className="text-lg font-extrabold">Invoice {done.invoiceNumber}</p>
+          <p className="mt-1 text-sm text-muted">
+            {formatMoney(finalTotal ?? breakdown?.total ?? 0, sym)}
+            {paymentMethod
+              ? ` · paid by ${paymentMethod === 'CASH' ? 'Cash' : paymentMethod === 'CARD' ? 'Card' : paymentMethod}`
+              : ''}
+          </p>
+          {doneLink && (
+            <a
+              href={doneLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-5 flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#25D366] text-sm font-extrabold text-[#07332a] transition hover:brightness-110"
+            >
+              <MessageCircle className="h-4 w-4" /> Send receipt on WhatsApp
+            </a>
+          )}
+          {!mobile.trim() && !customerMobile(session) && (
+            <p className="mt-2 text-xs text-muted">
+              No customer number saved — WhatsApp opens the contact picker with the receipt ready.
+            </p>
+          )}
+        </div>
+      ) : !breakdown ? (
         <p className="py-6 text-center text-sm text-muted">Calculating…</p>
       ) : (
         <div className="space-y-5">

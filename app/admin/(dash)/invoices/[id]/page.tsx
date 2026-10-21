@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { api } from '@/lib/api-client';
 import { useApi, invalidate } from '@/lib/use-api';
+import { buildReceiptText, whatsappReceiptUrl } from '@/lib/whatsapp/receipt-text';
 import { useAdmin } from '@/components/admin/admin-context';
 import { EmptyState, StatCard } from '@/components/ui/misc';
 import { Button } from '@/components/ui/button';
@@ -107,7 +108,6 @@ export default function InvoiceDetailPage() {
 
   const cafe = settings.cafe_name || 'our cafe';
   const shareText = `Invoice ${invoice.invoice_number} from ${cafe}`;
-  const waDigits = whatsappNumber(invoice.customer_mobile);
 
   function canShareFile(file: File): boolean {
     try {
@@ -158,46 +158,40 @@ export default function InvoiceDetailPage() {
   }
 
   async function whatsapp() {
-    setPdfBusy('whatsapp');
-    try {
-      // automatic path: queue the invoice PDF for the WhatsApp relay
-      const res = await api.post<{ ok: boolean; relayOnline: boolean }>('/api/admin/whatsapp/send', {
-        invoiceId: invoice.id,
-      });
-      invalidate('/api/admin/whatsapp');
-      toast.success(
-        res.relayOnline
-          ? 'Receipt is being delivered on WhatsApp now ✓'
-          : 'Receipt queued — it goes out when your WhatsApp relay is online'
-      );
-      return;
-    } catch (err: any) {
-      // no customer number / queue problem → manual share fallback
-      try {
-        const file = await getPdf();
-        // phones: the share sheet lets staff pick WhatsApp and attaches the file itself
-        if (await shareFile(file)) return;
-        downloadBlob(file, file.name);
-        if (!waDigits) {
-          toast.info('PDF downloaded — attach it in WhatsApp/email');
-          return;
-        }
-        const name = invoice.customer_name?.trim();
-        const msg =
-          `${name ? `Hi ${name}, ` : 'Hi, '}here is your invoice ${invoice.invoice_number} from ${cafe}` +
-          ` (total ${formatMoney(invoice.total_amount, sym)}). Thank you for playing!`;
-        const w = window.open(`https://wa.me/${waDigits}?text=${encodeURIComponent(msg)}`, '_blank', 'noopener,noreferrer');
-        toast.info(
-          w === null
-            ? 'PDF downloaded — pop-up blocked, open WhatsApp and attach it'
-            : 'PDF downloaded — attach it in the WhatsApp chat'
-        );
-      } catch (err2: any) {
-        toast.error(err?.message || err2?.message || 'Could not send');
-      }
-    } finally {
-      setPdfBusy(null);
-    }
+    // one-click: WhatsApp opens with the receipt message ready to send
+    const gaming = items.find((i) => i.item_type === 'GAMING');
+    const text = buildReceiptText(
+      {
+        invoiceNumber: invoice.invoice_number,
+        issuedAt: invoice.issued_at,
+        customerName: invoice.customer_name,
+        resourceName: invoice.resource_name,
+        sessionStart: invoice.session_start,
+        sessionEnd: invoice.session_end,
+        durationMinutes: invoice.duration_minutes,
+        sessionLines:
+          invoice.gaming_amount > 0
+            ? [{ name: gaming?.name_snapshot ?? 'Gaming session', amount: invoice.gaming_amount }]
+            : [],
+        itemLines: items
+          .filter((i) => i.item_type !== 'GAMING')
+          .map((i) => ({ name: i.name_snapshot, quantity: i.quantity, amount: i.total_price })),
+        subtotal: invoice.subtotal,
+        discountAmount: invoice.discount_amount,
+        taxLabel: invoice.tax_name,
+        taxAmount: invoice.tax_amount,
+        total: invoice.total_amount,
+        paid: invoice.status === 'PAID',
+        paymentMethod: payments[0]?.payment_method ?? null,
+      },
+      { cafeName: settings.cafe_name, currency: sym, timezone: settings.timezone }
+    );
+    const w = window.open(
+      whatsappReceiptUrl(text, invoice.customer_mobile),
+      '_blank',
+      'noopener,noreferrer'
+    );
+    if (w === null) toast.info('Pop-up blocked — allow pop-ups for the one-click WhatsApp send');
   }
 
   async function deleteInvoice() {
@@ -247,11 +241,9 @@ export default function InvoiceDetailPage() {
           <Button variant="outline" size="sm" onClick={downloadPdf} loading={pdfBusy === 'download'} disabled={!!pdfBusy}>
             {pdfBusy !== 'download' && <Download className="h-4 w-4" />} Download PDF
           </Button>
-          {waDigits && (
-            <Button variant="outline" size="sm" onClick={whatsapp} loading={pdfBusy === 'whatsapp'} disabled={!!pdfBusy}>
-              {pdfBusy !== 'whatsapp' && <MessageCircle className="h-4 w-4" />} WhatsApp
-            </Button>
-          )}
+          <Button variant="outline" size="sm" onClick={whatsapp}>
+            <MessageCircle className="h-4 w-4" /> WhatsApp
+          </Button>
           <Button size="sm" onClick={print}>
             <Printer className="h-4 w-4" /> Print
           </Button>
@@ -335,15 +327,6 @@ export default function InvoiceDetailPage() {
       />
     </div>
   );
-}
-
-/** Customer mobile -> wa.me digits (prefix 91 for 10-digit Indian numbers). */
-function whatsappNumber(mobile: string | null | undefined): string | null {
-  let d = (mobile || '').replace(/\D/g, '');
-  if (!d) return null;
-  if (d.length === 11 && d.startsWith('0')) d = d.slice(1);
-  if (d.length === 10) d = `91${d}`;
-  return d.length >= 11 && d.length <= 15 ? d : null;
 }
 
 function A4Layout({

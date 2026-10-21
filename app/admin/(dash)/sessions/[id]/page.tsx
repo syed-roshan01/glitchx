@@ -393,11 +393,15 @@ export default function SessionDetailPage() {
         rules={rules}
         open={endOpen}
         onClose={() => setEndOpen(false)}
-        onEnded={(res) => {
+        onEnded={(res, opts) => {
           setEndOpen(false);
           invalidate('/api/admin');
-          toast.success(`Invoice ${res.invoiceNumber} created`);
-          router.push(`/admin/invoices/${res.invoiceId}`);
+          if (opts?.navigate !== false) {
+            toast.success(`Invoice ${res.invoiceNumber} created`);
+            router.push(`/admin/invoices/${res.invoiceId}`);
+          } else {
+            load();
+          }
         }}
       />
       <DiscountModal
