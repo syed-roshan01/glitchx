@@ -42,8 +42,26 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     session = (await loadSession(admin, params.id)) ?? session;
   }
 
+  // the whole bill travels together: the lead session + companion stations
+  const rootId = session.parent_id ?? session.id;
+  const { data: groupRows } = await admin
+    .from('sessions')
+    .select('*, customers(name, mobile), resources(name, type)')
+    .or(`id.eq.${rootId},parent_id.eq.${rootId}`)
+    .order('created_at');
+  const group = (groupRows ?? []).map((r: any) =>
+    mapSession({
+      ...r,
+      customer_name: r.customers?.name,
+      customer_mobile: r.customers?.mobile,
+      resource_name: r.resources?.name,
+      resource_type: r.resources?.type,
+    })
+  );
+  const memberIds = group.length ? group.map((s) => s.id) : [session.id];
+
   const [itemsRes, settingsRes, rulesRes, invoiceRes] = await Promise.all([
-    admin.from('session_items').select('*').eq('session_id', session.id).order('created_at'),
+    admin.from('session_items').select('*').in('session_id', memberIds).order('created_at'),
     admin.from('settings').select('*').eq('id', 'default').single(),
     admin.from('pricing_rules').select('*').eq('active', true),
     admin
@@ -94,7 +112,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     });
   }
 
-  return NextResponse.json({ session, items, settings, rules, breakdown, invoice });
+  return NextResponse.json({ session, group, items, settings, rules, breakdown, invoice });
 }
 
 /** PATCH /api/admin/sessions/[id] — { action: pause | resume | discount | notes } */

@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input, Field } from '@/components/ui/input';
 import { useToast } from '@/components/ui/toast';
 import { api, serverNow } from '@/lib/api-client';
-import { calculateSessionBreakdown, gamingForTargetTotal, computeBillTotals } from '@/lib/billing/engine';
+import { calculateSessionBreakdown, calculateGroupBreakdown, gamingForTargetTotal, computeBillTotals } from '@/lib/billing/engine';
 import { formatMoney, formatDuration, formatClock } from '@/lib/billing/format';
 import { customerLabel, customerMobile, looksLikeMobile, rateLabel, billingModeText, CustomPriceBadge } from '@/components/admin/pricing-display';
 import { buildReceiptText, whatsappReceiptUrl } from '@/lib/whatsapp/receipt-text';
@@ -24,6 +24,7 @@ export function EndSessionModal({
   open,
   onClose,
   onEnded,
+  group,
 }: {
   session: Session;
   items: SessionItem[];
@@ -32,6 +33,8 @@ export function EndSessionModal({
   open: boolean;
   onClose: () => void;
   onEnded: (result: { invoiceId: string; invoiceNumber: string }, opts?: { navigate?: boolean }) => void;
+  /** every station on this bill (lead + companions) — one combined invoice */
+  group?: Session[];
 }) {
   const toast = useToast();
   // FROZEN the instant this modal opens ("End session" click): the timer
@@ -78,32 +81,44 @@ export function EndSessionModal({
   }, [open, session.discount_type, session.discount_value]);
 
   const breakdown = useMemo(() => {
-    if (!frozenEnd || !session.actual_start_time) return null;
+    if (!frozenEnd) return null;
+    const members = (group && group.length ? group : [session]).filter(
+      (s: Session) => s.actual_start_time && (s.status === 'ACTIVE' || s.status === 'PAUSED')
+    );
+    if (!members.length) return null;
+    const ids = new Set(members.map((s: Session) => s.id));
+    const groupItems = (items ?? []).filter((i) => ids.has(i.session_id));
+    const food = (list: SessionItem[]) =>
+      list.filter((i) => ['FOOD', 'DRINK', 'OTHER'].includes(i.item_type)).reduce((s, i) => s + i.total_price, 0);
+    const services = (list: SessionItem[]) =>
+      list.filter((i) => ['SERVICE', 'GAME'].includes(i.item_type)).reduce((s, i) => s + i.total_price, 0);
     const discount = discountType && discountValue > 0 ? { type: discountType, value: Number(discountValue) } : null;
     const taxRate = settings.tax_enabled ? settings.tax_rate ?? 0 : 0;
-    const itemAmount = items
-      .filter((i) => ['FOOD', 'DRINK', 'OTHER'].includes(i.item_type))
-      .reduce((s, i) => s + i.total_price, 0);
-    const serviceAmount = items
-      .filter((i) => ['SERVICE', 'GAME'].includes(i.item_type))
-      .reduce((s, i) => s + i.total_price, 0);
-    return calculateSessionBreakdown({
-      plan: session.pricing_plan_snapshot,
+    const itemAmount = food(groupItems);
+    const serviceAmount = services(groupItems);
+    return calculateGroupBreakdown({
+      members: members.map((s) => {
+        const its = groupItems.filter((i) => i.session_id === s.id);
+        return {
+          id: s.id,
+          plan: s.pricing_plan_snapshot,
+          resourceId: s.resource_id,
+          resourceType: s.resource_type ?? '',
+          timing: {
+            actual_start_time: s.actual_start_time!,
+            paused_at: s.paused_at,
+            total_paused_seconds: s.total_paused_seconds,
+          },
+          itemAmount: food(its),
+          serviceAmount: services(its),
+        };
+      }),
       rules,
       billingMode: settings.billing_mode,
       minBillingMinutes: settings.min_billing_minutes,
       totalRounding: settings.total_rounding ?? 0,
       timeZone: settings.timezone,
-      resourceId: session.resource_id,
-      resourceType: session.resource_type ?? '',
-      timing: {
-        actual_start_time: session.actual_start_time,
-        paused_at: session.paused_at,
-        total_paused_seconds: session.total_paused_seconds,
-      },
       endAt: frozenEnd,
-      itemAmount,
-      serviceAmount,
       discount,
       tax: { enabled: settings.tax_enabled, name: settings.tax_name, rate: settings.tax_rate },
       // an edited total freezes the time charge at the amount that produces it
@@ -112,7 +127,7 @@ export function EndSessionModal({
           ? gamingForTargetTotal({ targetTotal: finalTotal, itemAmount, serviceAmount, discount, taxRate, totalRounding: roundStep })
           : null,
     });
-  }, [frozenEnd, session, items, settings, rules, discountType, discountValue, finalTotal]);
+  }, [frozenEnd, session, group, items, settings, rules, discountType, discountValue, finalTotal, roundStep]);
 
   // smallest total allowed (food + services after discount/tax, zero time charge)
   const minTotal = useMemo(() => {
@@ -356,6 +371,17 @@ export function EndSessionModal({
               {session.pricing_plan_snapshot.custom && <CustomPriceBadge />}
               <span>· {billingModeText(settings.billing_mode, settings.min_billing_minutes)}</span>
             </p>
+            {breakdown.perMember.length > 1 &&
+              breakdown.perMember.map((p) => {
+                const s = (group && group.length ? group : [session]).find((g) => g.id === p.id);
+                return (
+                  <Row
+                    key={p.id ?? p.resourceId}
+                    label={`${s?.resource_name ?? 'Station'} · ${formatDuration(p.elapsedSeconds)}`}
+                    value={formatMoney(p.gamingAmount, sym)}
+                  />
+                );
+              })}
             {breakdown.itemAmount > 0 && <Row label="Food & drinks" value={formatMoney(breakdown.itemAmount, sym)} />}
             {breakdown.serviceAmount > 0 && <Row label="Games & services" value={formatMoney(breakdown.serviceAmount, sym)} />}
             <div className="my-2 border-t border-border" />

@@ -181,6 +181,7 @@ export default function DashboardPage() {
                 items={sessionItems}
                 settings={settings}
                 rules={rules}
+                allSessions={sessions}
                 onChanged={onSessionChanged}
               />
             ))}

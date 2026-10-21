@@ -14,10 +14,11 @@ import { Button } from '@/components/ui/button';
 import { Input, Field } from '@/components/ui/input';
 import { Modal } from '@/components/ui/modal';
 import { useToast } from '@/components/ui/toast';
-import { calculateSessionBreakdown, type BillingBreakdown } from '@/lib/billing/engine';
+import { calculateGroupBreakdown, type BillingBreakdown, type GroupBreakdown } from '@/lib/billing/engine';
 import { formatMoney, formatDuration, formatClock, formatDateTime } from '@/lib/billing/format';
 import { AddItemModal } from '@/components/admin/add-item-modal';
 import { AddServiceModal } from '@/components/admin/add-service-modal';
+import { AddStationModal } from '@/components/admin/add-station-modal';
 import { EndSessionModal } from '@/components/admin/end-session-modal';
 import { CustomerCard, PriceCard } from '@/components/admin/session-edit-cards';
 import { CustomPriceBadge, billingModeText, customerLine, rateLabel } from '@/components/admin/pricing-display';
@@ -25,10 +26,13 @@ import type { CafeSettings, Invoice, PricingRule, Session, SessionItem } from '@
 import {
   CupSoda, Sparkles, Pause, Play, Square, Percent, Receipt, ArrowLeft,
   Gamepad2, Clock, NotebookPen,
+  Plus,
 } from 'lucide-react';
 
 interface SessionDetail {
   session: Session;
+  /** every station on this bill (lead + companions) */
+  group?: Session[];
   items: SessionItem[];
   settings: CafeSettings;
   rules: PricingRule[];
@@ -47,6 +51,7 @@ export default function SessionDetailPage() {
   const [discountOpen, setDiscountOpen] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
   const [pauseBusy, setPauseBusy] = useState(false);
+  const [addStationOpen, setAddStationOpen] = useState(false);
 
   const key = id ? `/api/admin/sessions/${id}` : null;
   const { data, error, reload, mutate } = useApi<SessionDetail>(key);
@@ -56,6 +61,7 @@ export default function SessionDetailPage() {
   useRealtime('session_items', refetch, { filter: id ? `session_id=eq.${id}` : undefined });
 
   const session = data?.session;
+  const group = data?.group && data.group.length ? data.group : session ? [session] : [];
   const items = data?.items;
   const rules = data?.rules;
   const live = session?.status === 'ACTIVE' || session?.status === 'PAUSED';
@@ -81,36 +87,42 @@ export default function SessionDetailPage() {
   // NOTE: every hook must run before the early returns below.
   const breakdown = useMemo(() => {
     if (!session || !items || !rules || !live || !session.actual_start_time) return null;
-    const itemAmount = items
-      .filter((i) => ['FOOD', 'DRINK', 'OTHER'].includes(i.item_type))
-      .reduce((s, i) => s + i.total_price, 0);
-    const serviceAmount = items
-      .filter((i) => ['SERVICE', 'GAME'].includes(i.item_type))
-      .reduce((s, i) => s + i.total_price, 0);
-    return calculateSessionBreakdown({
-      plan: session.pricing_plan_snapshot,
+    const food = (list: SessionItem[]) =>
+      list.filter((i) => ['FOOD', 'DRINK', 'OTHER'].includes(i.item_type)).reduce((s, i) => s + i.total_price, 0);
+    const services = (list: SessionItem[]) =>
+      list.filter((i) => ['SERVICE', 'GAME'].includes(i.item_type)).reduce((s, i) => s + i.total_price, 0);
+    return calculateGroupBreakdown({
+      members: group
+        .filter((s) => s.actual_start_time && (s.status === 'ACTIVE' || s.status === 'PAUSED'))
+        .map((s) => {
+          const its = items.filter((i) => i.session_id === s.id);
+          return {
+            id: s.id,
+            plan: s.pricing_plan_snapshot,
+            resourceId: s.resource_id,
+            resourceType: s.resource_type ?? '',
+            timing: {
+              actual_start_time: s.actual_start_time!,
+              paused_at: s.paused_at,
+              total_paused_seconds: s.total_paused_seconds,
+            },
+            itemAmount: food(its),
+            serviceAmount: services(its),
+          };
+        }),
       rules,
       billingMode: settings.billing_mode,
       minBillingMinutes: settings.min_billing_minutes,
       totalRounding: settings.total_rounding ?? 0,
       timeZone: settings.timezone,
-      resourceId: session.resource_id,
-      resourceType: session.resource_type ?? '',
-      timing: {
-        actual_start_time: session.actual_start_time,
-        paused_at: session.paused_at,
-        total_paused_seconds: session.total_paused_seconds,
-      },
       endAt: now ?? new Date(),
-      itemAmount,
-      serviceAmount,
       discount:
         session.discount_type && session.discount_value
           ? { type: session.discount_type, value: session.discount_value }
           : null,
       tax: { enabled: settings.tax_enabled, name: settings.tax_name, rate: settings.tax_rate },
     });
-  }, [live, session, items, settings, rules, now]);
+  }, [live, session, group, items, settings, rules, now]);
 
   const load = useCallback(() => {
     reload();
@@ -146,7 +158,8 @@ export default function SessionDetailPage() {
   }
 
   const sym = settings.currency_symbol || '₹';
-  const bill = breakdown ?? data.breakdown;
+  const bill = (breakdown ?? data.breakdown) as GroupBreakdown | null;
+  const perMember = bill?.perMember ?? [];
 
   /** optimistic local edit of the session; returns a rollback */
   function optimistic(fn: (s: Session) => Session): () => void {
@@ -345,6 +358,17 @@ export default function SessionDetailPage() {
 
           {bill && (
             <div className="mt-4 space-y-1.5 border-t border-border pt-4 text-sm">
+              {perMember.length > 1 &&
+                perMember.map((p) => {
+                  const s = group.find((g) => g.id === p.id);
+                  return (
+                    <Row
+                      key={p.id ?? p.resourceId}
+                      label={`${s?.resource_name ?? 'Station'} · ${formatDuration(p.elapsedSeconds)}`}
+                      value={formatMoney(p.gamingAmount, sym)}
+                    />
+                  );
+                })}
               <Row label="Subtotal" value={formatMoney(bill.subtotal, sym)} />
               {bill.discountAmount > 0 && (
                 <Row label="Discount" value={`− ${formatMoney(bill.discountAmount, sym)}`} tone="text-success" />
@@ -373,6 +397,9 @@ export default function SessionDetailPage() {
           <Button variant="outline" onClick={() => setDiscountOpen(true)}>
             <Percent className="h-4 w-4" /> Discount
           </Button>
+          <Button variant="outline" onClick={() => setAddStationOpen(true)}>
+            <Plus className="h-4 w-4" /> Add station
+          </Button>
           <Button variant="danger" size="lg" onClick={() => setEndOpen(true)}>
             <Square className="h-4 w-4" /> End Session
           </Button>
@@ -387,8 +414,16 @@ export default function SessionDetailPage() {
       {/* modals */}
       <AddItemModal sessionId={session.id} open={addItemOpen} onClose={() => setAddItemOpen(false)} onAdded={load} />
       <AddServiceModal sessionId={session.id} open={addServiceOpen} onClose={() => setAddServiceOpen(false)} onAdded={load} />
+      <AddStationModal
+        session={session}
+        settings={settings}
+        open={addStationOpen}
+        onClose={() => setAddStationOpen(false)}
+        onAdded={load}
+      />
       <EndSessionModal
         session={session}
+        group={group}
         items={items}
         settings={settings}
         rules={rules}

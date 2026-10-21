@@ -62,6 +62,13 @@ export const startSessionSchema = z.object({
   notes: z.string().max(500).optional().nullable(),
 });
 
+export const addStationSchema = z.object({
+  resourceId: z.string().uuid('Pick a station'),
+  pricingPlanId: z.string().uuid().optional().nullable(),
+  expectedMinutes: z.number().int().min(5).max(24 * 60).optional().nullable(),
+  customPrice: z.number().min(0).max(1_000_000).optional().nullable(),
+});
+
 export const endSessionSchema = z.object({
   discountType: z.enum(['PERCENT', 'FIXED']).optional().nullable(),
   discountValue: z.number().min(0).max(100000).optional().nullable(),

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, jsonError, friendlyError, audit } from '@/lib/supabase/api';
 import { mapSession, mapSessionItem, mapSettings, mapPricingRule } from '@/lib/mappers';
-import { calculateSessionBreakdown, gamingForTargetTotal } from '@/lib/billing/engine';
+import { calculateSessionBreakdown, calculateGroupBreakdown, gamingForTargetTotal } from '@/lib/billing/engine';
 import { endSessionSchema } from '@/lib/validations/schemas';
 import { num } from '@/lib/billing/format';
 
@@ -114,27 +114,56 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const parsedEnd = input.endAt ? new Date(input.endAt) : null;
   const frozenEnd = parsedEnd && !Number.isNaN(parsedEnd.getTime()) ? parsedEnd : new Date();
 
-  const breakdown = calculateSessionBreakdown({
+  // the whole bill: the lead session + every companion station added to it
+  const { data: groupRows } = await admin
+    .from('sessions')
+    .select('*')
+    .or(`id.eq.${session.id},parent_id.eq.${session.id},id.eq.${session.parent_id ?? '00000000-0000-0000-0000-000000000000'}`)
+    .in('status', ['ACTIVE', 'PAUSED']);
+  const seen = new Map<string, any>();
+  for (const row of [session as any, ...(groupRows ?? [])]) {
+    if (!seen.has(row.id)) seen.set(row.id, row);
+  }
+  const group = [...seen.values()];
+  const groupIds = group.map((s) => s.id);
+  const { data: groupItems } = await admin
+    .from('session_items')
+    .select('*')
+    .in('session_id', groupIds);
+
+  const groupBreakdown = calculateGroupBreakdown({
     gamingOverride,
-    plan: session.pricing_plan_snapshot,
+    members: group.map((s) => {
+      const its = (groupItems ?? []).filter((i: any) => i.session_id === s.id);
+      return {
+        id: s.id,
+        plan: s.pricing_plan_snapshot,
+        resourceId: s.resource_id,
+        resourceType: s.resource_type ?? '',
+        timing: {
+          actual_start_time: s.actual_start_time,
+          paused_at: s.paused_at,
+          total_paused_seconds: s.total_paused_seconds,
+        },
+        itemAmount: its
+          .filter((i: any) => ['FOOD', 'DRINK', 'OTHER'].includes(i.item_type))
+          .reduce((sum: number, i: any) => sum + i.total_price, 0),
+        serviceAmount: its
+          .filter((i: any) => ['SERVICE', 'GAME'].includes(i.item_type))
+          .reduce((sum: number, i: any) => sum + i.total_price, 0),
+      };
+    }),
     rules,
     billingMode: settings.billing_mode,
     minBillingMinutes: settings.min_billing_minutes,
     timeZone: settings.timezone,
-    resourceId: session.resource_id,
-    resourceType: session.resource_type ?? '',
-    timing: {
-      actual_start_time: session.actual_start_time,
-      paused_at: session.paused_at,
-      total_paused_seconds: session.total_paused_seconds,
-    },
     endAt: frozenEnd,
-    itemAmount,
-    serviceAmount,
     discount,
     tax: { enabled: settings.tax_enabled, name: settings.tax_name, rate: settings.tax_rate },
     totalRounding,
   });
+
+  const breakdown = groupBreakdown;
 
   // ---- atomic end-session transaction ----
   const { data: result, error } = await admin.rpc('admin_end_session_and_invoice', {
@@ -143,6 +172,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       duration_seconds: Math.floor(breakdown.elapsedSeconds),
       gaming_amount: breakdown.gamingAmount,
       rounding_amount: breakdown.roundingAmount,
+      // one charge per station — the invoice shows a line each
+      gaming_lines: groupBreakdown.perMember
+        .filter((m) => m.gamingAmount > 0)
+        .map((m) => ({ session_id: m.id, amount: m.gamingAmount })),
     },
     p_discount_type: input.discountType ?? null,
     p_discount_value: input.discountType ? Number(input.discountValue ?? 0) : 0,

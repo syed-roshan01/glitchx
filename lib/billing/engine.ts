@@ -341,6 +341,114 @@ export function gamingForTargetTotal(args: {
     : null;
 }
 
+export interface GroupMemberArgs {
+  /** session id — echoed on the per-member lines */
+  id?: string;
+  plan: PlanSnapshot;
+  resourceId: string;
+  resourceType: string;
+  timing: SessionTiming;
+  itemAmount?: number;
+  serviceAmount?: number;
+}
+
+export interface GroupBreakdown extends BillingBreakdown {
+  /** one entry per station (pool + PS5 on the same bill) */
+  perMember: {
+    id?: string;
+    resourceId: string;
+    gamingAmount: number;
+    computedGamingAmount: number;
+    elapsedSeconds: number;
+    billableMinutes: number;
+    itemAmount: number;
+    serviceAmount: number;
+  }[];
+}
+
+/** One bill across several stations: each keeps its own timer and plan,
+ *  the totals (discount → tax → ₹-rounding) apply to the combined sum. */
+export function calculateGroupBreakdown(args: {
+  members: GroupMemberArgs[];
+  rules?: RateRule[];
+  billingMode: BillingMode;
+  minBillingMinutes?: number;
+  timeZone?: string;
+  endAt?: Date;
+  discount?: { type: DiscountType; value: number } | null;
+  tax?: { enabled: boolean; name?: string | null; rate?: number | null } | null;
+  totalRounding?: number;
+  gamingOverride?: number | null;
+}): GroupBreakdown {
+  const perMember = args.members.map((m) => {
+    const b = calculateSessionBreakdown({
+      plan: m.plan,
+      rules: args.rules,
+      billingMode: args.billingMode,
+      minBillingMinutes: args.minBillingMinutes,
+      // the money rounding applies to the combined total only
+      totalRounding: 0,
+      timeZone: args.timeZone,
+      resourceId: m.resourceId,
+      resourceType: m.resourceType,
+      timing: m.timing,
+      endAt: args.endAt,
+      itemAmount: m.itemAmount ?? 0,
+      serviceAmount: m.serviceAmount ?? 0,
+    });
+    return {
+      id: m.id,
+      resourceId: m.resourceId,
+      gamingAmount: b.computedGamingAmount,
+      computedGamingAmount: b.computedGamingAmount,
+      elapsedSeconds: b.elapsedSeconds,
+      billableMinutes: b.billableMinutes,
+      itemAmount: b.itemAmount,
+      serviceAmount: b.serviceAmount,
+      perMinute: b.perMinute,
+      ruleApplied: b.ruleApplied,
+    };
+  });
+
+  const computedGaming = round2(perMember.reduce((s, p) => s + p.computedGamingAmount, 0));
+  const itemAmount = round2(perMember.reduce((s, p) => s + p.itemAmount, 0));
+  const serviceAmount = round2(perMember.reduce((s, p) => s + p.serviceAmount, 0));
+  const gamingAdjusted = args.gamingOverride != null && Number.isFinite(args.gamingOverride);
+  const gamingAmount = gamingAdjusted ? round2(Math.max(args.gamingOverride as number, 0)) : computedGaming;
+  // a hand-edited total adjusts the lead station's line
+  if (gamingAdjusted && perMember.length) {
+    const delta = round2(gamingAmount - computedGaming);
+    perMember[0].gamingAmount = round2(Math.max(perMember[0].gamingAmount + delta, 0));
+  }
+
+  const taxEnabled = args.tax?.enabled ?? false;
+  const taxRate = taxEnabled ? args.tax?.rate ?? 0 : 0;
+  const totals = computeBillTotals(
+    gamingAmount,
+    itemAmount,
+    serviceAmount,
+    args.discount,
+    taxRate,
+    args.totalRounding ?? 0
+  );
+
+  return {
+    elapsedSeconds: perMember[0]?.elapsedSeconds ?? 0,
+    billableMinutes: perMember[0]?.billableMinutes ?? 0,
+    perMinute: perMember[0]?.perMinute ?? 0,
+    ruleApplied: perMember[0]?.ruleApplied ?? null,
+    gamingAmount,
+    computedGamingAmount: computedGaming,
+    gamingAdjusted,
+    itemAmount,
+    serviceAmount,
+    taxName: taxEnabled ? args.tax?.name ?? null : null,
+    taxRate,
+    perMember,
+    ...totals,
+  };
+}
+
 /** Full session bill — used for the live "current amount", the
  *  end-session confirmation screen, and (server-side) the final
  *  amounts handed to the invoice transaction. */

@@ -562,6 +562,48 @@ async function main() {
     await client.query('select public.admin_end_session_and_invoice($1, $2, null, 0, null, null, $3)', [pkgSid, JSON.stringify({ duration_seconds: 0, gaming_amount: 120 }), user.id]);
     await client.query("update public.pricing_plans set active = false where name = 'Pool — 30 Minutes'");
 
+    // 21c. multi-station bill: pool + PS5 → ONE invoice with both lines (00019)
+    const { rows: [{ id: ps5Id }] } = await client.query("select id from public.resources where name = 'PS5 01'");
+    await client.query(
+      'select public.admin_start_session(null, $1, $2, now(), 30, null, null, $3, null, $4, $5)',
+      [poolRes.id, poolHourly.id, user.id, 'Group', '9876500099']
+    );
+    const { rows: [lead] } = await client.query(
+      "select id from public.sessions where guest_mobile = '9876500099' order by created_at desc limit 1"
+    );
+    const leadSid = lead.id;
+    const { rows: [{ admin_add_station: ps5Sid }] } = await client.query(
+      'select public.admin_add_station($1, $2, null, 60, null, $3)', [leadSid, ps5Id, user.id]
+    );
+    const { rows: [ps5Sess] } = await client.query('select parent_id, status from public.sessions where id = $1', [ps5Sid]);
+    ps5Sess && ps5Sess.parent_id === leadSid && ps5Sess.status === 'ACTIVE'
+      ? pass('add-station: PS5 joins the running bill (own timer, same customer)')
+      : fail('add-station link', new Error(JSON.stringify(ps5Sess)));
+
+    const { rows: [{ admin_end_session_and_invoice: endedG }] } = await client.query(
+      'select public.admin_end_session_and_invoice($1, $2, null, 0, null, null, $3)',
+      [leadSid, JSON.stringify({
+        duration_seconds: 0,
+        gaming_amount: 175,
+        gaming_lines: [{ session_id: leadSid, amount: 100 }, { session_id: ps5Sid, amount: 75 }],
+      }), user.id]
+    );
+    const { rows: gInv } = await client.query('select * from public.invoices where session_id = $1', [leadSid]);
+    const { rows: gLines } = await client.query(
+      'select ii.name_snapshot, ii.total_price from public.invoice_items ii join public.invoices i on i.id = ii.invoice_id where i.session_id = $1 and ii.item_type = $2 order by ii.sort_order',
+      [leadSid, 'GAMING']
+    );
+    const { rows: gSess } = await client.query(
+      'select id, status, gaming_amount from public.sessions where id in ($1, $2)', [leadSid, ps5Sid]
+    );
+    gInv.length === 1
+      && Number(gInv[0].total_amount) === 175
+      && gInv[0].resource_name === 'Pool Table + PS5 01'
+      && gLines.length === 2
+      && gSess.length === 2 && gSess.every((r) => r.status === 'COMPLETED')
+      ? pass('multi-station bill: pool + PS5 → ONE ₹175 invoice, 2 gaming lines, both stopped')
+      : fail('multi-station bill', new Error(JSON.stringify({ gInv, gLines, gSess, endedG })));
+
     // 22. ledger + ACLs for the new functions
     await client.query(
       "insert into public.ledger_entries (entry_type, category, amount, entry_date, payment_method, created_by) values ('EXPENSE', 'Electricity', 2500, current_date, 'UPI', $1)",

@@ -23,12 +23,15 @@ export function SessionCard({
   items,
   settings,
   rules,
+  allSessions,
   onChanged,
 }: {
   session: Session;
   items: SessionItem[];
   settings: CafeSettings;
   rules: PricingRule[];
+  /** every active session — used to find companion stations on this bill */
+  allSessions?: Session[];
   onChanged: () => void;
 }) {
   const now = useNow(1000);
@@ -45,6 +48,17 @@ export function SessionCard({
 
   const propItems = useMemo(() => items.filter((i) => i.session_id === session.id), [items, session.id]);
   const activeItems = localItems ?? propItems;
+
+  // companion stations share this bill (pool + PS5 → one invoice)
+  const group = useMemo(() => {
+    const all = allSessions && allSessions.length ? allSessions : [session];
+    const rootId = session.parent_id ?? session.id;
+    return all.filter((s) => s.id === rootId || s.parent_id === rootId);
+  }, [allSessions, session]);
+  const modalItems = useMemo(
+    () => [...items.filter((i) => i.session_id !== session.id), ...activeItems],
+    [items, activeItems, session.id]
+  );
 
   const breakdown = useMemo(() => {
     if (!session.actual_start_time) return null;
@@ -233,7 +247,8 @@ export function SessionCard({
       />
       <EndSessionModal
         session={session}
-        items={activeItems}
+        group={group}
+        items={modalItems}
         settings={settings}
         rules={rules}
         open={endOpen}

@@ -125,6 +125,8 @@ export interface PlanSnapshot {
 
 export interface Session {
   id: string;
+  /** companion stations on the same bill link to the lead session */
+  parent_id?: string | null;
   booking_id: string | null;
   /** null for walk-ins whose details haven't been added yet */
   customer_id: string | null;
