@@ -419,3 +419,39 @@ describe('money rounding (total_rounding steps)', () => {
     money(b.roundingAmount, 0);
   });
 });
+
+describe('packages ignore the min-billing floor', () => {
+  const pkg = { name: 'Pool — 30 Minutes', billing_type: 'PACKAGE' as const, price: 120, duration_minutes: 30 };
+
+  it('a 30-min ?120 package bills ?120 even with a 50-min floor', () => {
+    money(estimateBookingAmount(pkg, 30, 'EXACT_MINUTES', 50), 120);
+    const b = calculateSessionBreakdown({
+      plan: pkg,
+      billingMode: 'EXACT_MINUTES',
+      minBillingMinutes: 50,
+      resourceId: 'r',
+      resourceType: 'POOL',
+      timing: { actual_start_time: '2026-10-03T20:00:00Z', paused_at: null, total_paused_seconds: 0 },
+      endAt: new Date('2026-10-03T20:30:00Z'),
+    });
+    money(b.gamingAmount, 120);
+  });
+
+  it('overage still bills past the package (45 min ? 120 + 15 × ?4)', () => {
+    const b = calculateSessionBreakdown({
+      plan: pkg,
+      billingMode: 'EXACT_MINUTES',
+      minBillingMinutes: 50,
+      resourceId: 'r',
+      resourceType: 'POOL',
+      timing: { actual_start_time: '2026-10-03T20:00:00Z', paused_at: null, total_paused_seconds: 0 },
+      endAt: new Date('2026-10-03T20:45:00Z'),
+    });
+    money(b.gamingAmount, 180);
+  });
+
+  it('timed plans still respect the floor', () => {
+    const hourly = { name: 'Pool Hourly', billing_type: 'HOURLY' as const, price: 200, duration_minutes: null };
+    money(estimateBookingAmount(hourly, 30, 'EXACT_MINUTES', 50), 166.67);
+  });
+});

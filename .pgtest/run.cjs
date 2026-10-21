@@ -542,6 +542,26 @@ async function main() {
     await client.query('select public.admin_end_session_and_invoice($1, $2, null, 0, null, null, $3)', [poolSid, JSON.stringify({ duration_seconds: 0, gaming_amount: 0 }), user.id]);
     await client.query("update public.pricing_plans set active = false where name = 'Pool cheap pkg'");
 
+    // 21b. a booked 30-min slot quotes AND bills its package price (00018)
+    await client.query(
+      "insert into public.pricing_plans (name, resource_type, billing_type, price, duration_minutes, active) values ('Pool — 30 Minutes', $1, 'PACKAGE', 120, 30, true)",
+      [poolRes.type]
+    );
+    const { rows: [{ public_create_booking: pkgBk }] } = await client.query(
+      'select * from public.public_create_booking($1, $2, $3, $4, 30, null)',
+      ['Ishaan', '9876500088', poolRes.id, new Date(Date.now() + 120_000).toISOString()]
+    );
+    Number(pkgBk.estimated_amount) === 120
+      ? pass('booking quote: 30-min pool slot = ₹120 (the package)')
+      : fail('30-min booking quote', new Error(JSON.stringify(pkgBk)));
+    const { rows: [{ sid: pkgSid }] } = await client.query('select public.admin_check_in_booking($1, $2) as sid', [pkgBk.id, user.id]);
+    const { rows: [pkgSess] } = await client.query('select pricing_plan_snapshot as snap from public.sessions where id = $1', [pkgSid]);
+    pkgSess.snap.billing_type === 'PACKAGE' && Number(pkgSess.snap.price) === 120
+      ? pass('check-in of the booked slot uses the 30-min package (bill = quote)')
+      : fail('package check-in', new Error(JSON.stringify(pkgSess)));
+    await client.query('select public.admin_end_session_and_invoice($1, $2, null, 0, null, null, $3)', [pkgSid, JSON.stringify({ duration_seconds: 0, gaming_amount: 120 }), user.id]);
+    await client.query("update public.pricing_plans set active = false where name = 'Pool — 30 Minutes'");
+
     // 22. ledger + ACLs for the new functions
     await client.query(
       "insert into public.ledger_entries (entry_type, category, amount, entry_date, payment_method, created_by) values ('EXPENSE', 'Electricity', 2500, current_date, 'UPI', $1)",

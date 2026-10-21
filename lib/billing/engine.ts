@@ -210,7 +210,6 @@ export function computeGamingCharge(
     const extra = ruleApplied ? extraMinutes * (ruleApplied.price / 60) : extraMinutes * (plan.price / pkgMinutes);
     return { amount: round2(plan.price + extra), perMinute, ruleApplied };
   }
-
   return { amount: round2(perMinute * billableMinutes), perMinute, ruleApplied };
 }
 
@@ -237,7 +236,10 @@ export function estimateBookingAmount(
   minBillingMinutes = 0
 ): number {
   if (!plan || durationMinutes <= 0) return 0;
-  const billable = roundBillableMinutes(durationMinutes * 60, billingMode, minBillingMinutes);
+  // a package's own duration is its minimum — the cafe-wide floor never
+  // inflates a fixed-duration package (30-min ₹120 stays ₹120)
+  const floor = plan.billing_type === 'PACKAGE' && plan.duration_minutes ? 0 : minBillingMinutes;
+  const billable = roundBillableMinutes(durationMinutes * 60, billingMode, floor);
   return computeGamingCharge(
     plan,
     undefined,
@@ -345,10 +347,14 @@ export function gamingForTargetTotal(args: {
 export function calculateSessionBreakdown(args: BreakdownArgs): BillingBreakdown {
   const end = args.endAt ?? new Date();
   const elapsedSeconds = liveElapsedSeconds(args.timing, end);
+  // a package's own duration is its minimum — the cafe-wide minimum-billing
+  // floor must never inflate a fixed-duration package
+  const minFloor =
+    args.plan.billing_type === 'PACKAGE' && args.plan.duration_minutes ? 0 : args.minBillingMinutes ?? 0;
   const billableMinutes = roundBillableMinutes(
     elapsedSeconds,
     args.billingMode,
-    args.minBillingMinutes ?? 0
+    minFloor
   );
 
   const gaming = computeGamingCharge(args.plan, args.rules, {

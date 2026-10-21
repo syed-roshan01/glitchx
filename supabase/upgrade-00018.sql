@@ -1,5 +1,5 @@
 -- =============================================================
--- GlitchX UPGRADE: ₹5 money rounding + package-aware booking prices
+-- GlitchX UPGRADE: â‚¹5 money rounding + package-aware booking prices
 --
 -- ONE-PASTE upgrade (identical to migration 00018).
 --
@@ -9,13 +9,11 @@
 --   3. Success = "Success. No rows returned"
 --
 -- What it does:
---   * Bills round UP to the next ₹5 (122 -> 125, 141 -> 145) with a
+--   * Bills round UP to the next â‚¹5 (122 -> 125, 141 -> 145) with a
 --     visible "Round off" line. Configurable in Settings -> Billing.
---   * The online booking page now quotes a 30-min Pool slot as ₹120
---     (the "Pool — 30 Minutes" package), instead of the hourly plan
+--   * The online booking page now quotes a 30-min Pool slot as â‚¹120
+--     (the "Pool â€” 30 Minutes" package), instead of the hourly plan
 --     inflated by the minimum-billing floor.
--- =============================================================
-
 -- =============================================================
 -- 00018 â€” â‚¹5 money rounding + package-aware booking prices
 --
@@ -323,3 +321,73 @@ as $$
 $$;
 
 grant execute on function public.estimate_booking_amount(uuid, integer) to anon, authenticated, service_role;
+
+-- -------------------------------------------------------------
+-- admin_check_in_booking: a package sized exactly for the booked
+-- duration becomes the session's plan (the session must bill the
+-- quoted price â€” a 30-min booking quotes the 30-min package and
+-- bills exactly it). Otherwise the station's default plan, as
+-- before.
+-- -------------------------------------------------------------
+create or replace function public.admin_check_in_booking(
+  p_booking_id uuid,
+  p_acting_user uuid default null
+)
+returns uuid
+language plpgsql security definer set search_path = public
+as $$
+declare
+  v_booking record;
+  v_customer_id uuid;
+  v_plan_id uuid;
+  v_session_id uuid;
+begin
+  select * into v_booking from public.bookings
+  where id = p_booking_id and status in ('PENDING', 'CONFIRMED');
+  if not found then
+    raise exception 'BOOKING_NOT_FOUND';
+  end if;
+
+  v_customer_id := public.admin_find_or_create_customer(
+    v_booking.customer_name, v_booking.customer_mobile, null, p_acting_user
+  );
+
+  -- a package sized exactly for the booked duration wins â€” same rule (and
+  -- same price order) as estimate_booking_amount, so the bill matches the quote
+  select pp.id into v_plan_id
+  from public.pricing_plans pp
+  join public.resources r on r.id = v_booking.resource_id
+  where pp.active
+    and pp.resource_type = r.type
+    and pp.billing_type = 'PACKAGE'
+    and pp.duration_minutes = v_booking.duration_minutes
+  order by pp.price asc
+  limit 1;
+
+  -- otherwise the station's default plan first, then the cheapest active plan
+  if v_plan_id is null then
+    select pp.id into v_plan_id
+    from public.pricing_plans pp
+    join public.resources r on r.id = v_booking.resource_id
+    where pp.active
+      and (pp.id = r.default_pricing_plan_id
+        or (pp.resource_type = r.type))
+    order by (pp.id = r.default_pricing_plan_id) desc, pp.price asc
+    limit 1;
+  end if;
+
+  if v_plan_id is null then
+    raise exception 'NO_PRICING_PLAN';
+  end if;
+
+  v_session_id := public.admin_start_session(
+    v_customer_id, v_booking.resource_id, v_plan_id,
+    now(), v_booking.duration_minutes, p_booking_id, v_booking.notes, p_acting_user
+  );
+
+  return v_session_id;
+end;
+$$;
+
+revoke execute on function public.admin_check_in_booking(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.admin_check_in_booking(uuid, uuid) to service_role;
