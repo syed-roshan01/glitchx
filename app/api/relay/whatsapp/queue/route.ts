@@ -30,31 +30,5 @@ export async function GET(req: NextRequest) {
       caption: m.caption,
       filename: `${String(m.invoices?.invoice_number ?? 'receipt').replace(/[^\w.-]+/g, '_')}.pdf`,
     })),
-    _debug: {
-      computedAt: new Date().toISOString(),
-      msgsError: msgs.error ? { message: msgs.error.message, code: (msgs.error as any).code, details: (msgs.error as any).details } : null,
-      stateError: state.error ? { message: state.error.message, code: (state.error as any).code, details: (state.error as any).details } : null,
-      msgsData: msgs.data,
-      stateData: state.data,
-      supaUrl: process.env.NEXT_PUBLIC_SUPABASE_URL,
-      keyHead: (process.env.SUPABASE_SERVICE_ROLE_KEY || '').slice(0, 8),
-      rawCross: await (async () => {
-        try {
-          const r = await fetch(
-            `${process.env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/whatsapp_messages?select=id&status=eq.PENDING&limit=5`,
-            {
-              headers: {
-                apikey: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
-                Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY || ''}`,
-              },
-              cache: 'no-store',
-            }
-          );
-          return { status: r.status, body: (await r.text()).slice(0, 200) };
-        } catch (e: any) {
-          return { threw: String(e?.message || e) };
-        }
-      })(),
-    },
   });
 }

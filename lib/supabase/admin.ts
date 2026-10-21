@@ -1,4 +1,5 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { noStoreFetch } from './no-store-fetch';
 
 /**
  * SERVICE-ROLE client — bypasses RLS. SERVER ONLY.
@@ -20,5 +21,6 @@ export function createAdminClient(): SupabaseClient {
       detectSessionInUrl: false,
     },
     db: { schema: 'public' },
+    global: { fetch: noStoreFetch },
   });
 }

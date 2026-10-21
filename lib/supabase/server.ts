@@ -1,5 +1,6 @@
 import { createServerClient, type CookieOptions } from '@supabase/ssr';
 import { cookies } from 'next/headers';
+import { noStoreFetch } from './no-store-fetch';
 
 /** Cookie-bound server client — resolves the CURRENT USER'S session.
  *  Used to authenticate admin requests (role checks) and in middleware. */
@@ -24,6 +25,7 @@ export function createServerSupabaseClient() {
           }
         },
       },
+      global: { fetch: noStoreFetch },
     }
   );
 }
