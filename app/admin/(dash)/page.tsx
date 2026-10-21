@@ -46,6 +46,10 @@ export default function DashboardPage() {
   useRealtime('waitlist', refetch);
   useRealtime('resources', refetch);
 
+  // revenue is hidden by default — reveal only on demand (customers
+  // at the counter shouldn't see the day's takings)
+  const [showRevenue, setShowRevenue] = useState(false);
+
   const onSessionChanged = useCallback(() => {
     reload();
     invalidate('/api/admin/sessions');
@@ -76,12 +80,8 @@ export default function DashboardPage() {
   }
 
   const { stats, resources, sessions, sessionItems, waitlist, bookings, rules } = data;
-
-  // revenue is hidden by default — reveal only on demand (customers
-  // at the counter shouldn't see the day's takings)
-  const [showRevenue, setShowRevenue] = useState(false);
-  const money = (n: number) => (showRevenue ? formatMoney(n, sym) : `${sym} ••••`);
   const sym = settings.currency_symbol || '₹';
+  const money = (n: number) => (showRevenue ? formatMoney(n, sym) : `${sym} ••••`);
 
   // Utilization = busy minutes today / (active resources × minutes elapsed
   // since local midnight in the cafe timezone), capped at 100%.
