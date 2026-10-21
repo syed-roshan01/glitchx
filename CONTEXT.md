@@ -281,6 +281,25 @@ DB exclusion constraints; invoice prices snapshotted (immutable history).
     sets up any other PC incl. auto-start at login) ✓, QR scanned ✓
     (WhatsApp 917353185502 linked), toggles enabled ✓, first receipt delivered ✓.
 
+- **2026-10-21 (session 8):** owner asks round — (a) **relay dropped** (folder won't
+  run on the shop PC; one-click `whatsappReceiptUrl` buttons are the WhatsApp
+  story now — `lib/whatsapp/receipt-text.ts` builds a framed receipt message);
+  pipeline switched off in `whatsapp_state`, pending queue cleared, relay killed.
+  (b) **₹5 money rounding** — `settings.total_rounding` (default 5; 0 = off):
+  engine `computeBillTotals` rounds the payable UP (122→125, 141→145),
+  `roundingAmount` flows to the RPC via `p_billing->>'rounding_amount'`
+  (00018), "Round off" row on invoice A4/thermal + end modal; manual totals
+  snap up (modal + end route). (c) **Dashboard revenue privacy** — amounts show
+  `₹ ••••` behind a "Show revenue" toggle (default hidden). (d) **Booking
+  prices**: `estimate_booking_amount` now prefers an exact-sized PACKAGE
+  ("Pool — 30 Minutes" ₹120 wins for 30-min slots) and packages aren't
+  inflated by the min-billing floor — 30-min pool quoted ₹166.67 before
+  (hourly ₹200 × 50-min floor!). Migration `00018_total_rounding_and_packages.sql`
+  + `supabase/upgrade-00018.sql` one-paste. 37/37 engine tests + full DB suite
+  + setup.sql (18 files) paste cycle ✓. **Flagged to owner: live
+  `min_billing_minutes = 50`** — sub-50-min plays bill 50 min at checkout,
+  which contradicts the ₹120 30-min package quote; awaiting their call.
+
 ## 9. Known issues / pending
 
 0. **WhatsApp go-live (session 7 leftovers, in order):**
