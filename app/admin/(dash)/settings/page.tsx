@@ -101,6 +101,13 @@ export default function SettingsPage() {
             <Field label="Minimum billing (minutes)">
               <Input type="number" min={0} max={240} value={settings.min_billing_minutes} onChange={(e) => setSettings({ ...settings, min_billing_minutes: Number(e.target.value) })} />
             </Field>
+            <Field label="Round bill up to" hint="The payable total rounds up to this step (122 → 125)">
+              <Select value={String(settings.total_rounding ?? 0)} onChange={(e) => setSettings({ ...settings, total_rounding: Number(e.target.value) })}>
+                <option value="5">₹5 steps (122 → 125, 141 → 145)</option>
+                <option value="10">₹10 steps</option>
+                <option value="0">Exact — no rounding</option>
+              </Select>
+            </Field>
             <Field label="Currency symbol">
               <Input value={settings.currency_symbol} onChange={(e) => setSettings({ ...settings, currency_symbol: e.target.value })} maxLength={4} />
             </Field>

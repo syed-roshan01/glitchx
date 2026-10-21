@@ -75,6 +75,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       rules,
       billingMode: settings.billing_mode,
       minBillingMinutes: settings.min_billing_minutes,
+      totalRounding: settings.total_rounding ?? 0,
       timeZone: settings.timezone,
       resourceId: session.resource_id,
       resourceType: session.resource_type ?? '',

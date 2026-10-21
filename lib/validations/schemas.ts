@@ -207,6 +207,7 @@ export const settingsSchema = z.object({
   tax_rate: z.number().min(0).max(100).optional().nullable(),
   billing_mode: z.enum(['EXACT_MINUTES', 'ROUND_UP_15', 'ROUND_UP_30', 'ROUND_UP_60']),
   min_billing_minutes: z.number().int().min(0).max(240).default(0),
+  total_rounding: z.number().int().min(0).max(100).optional(),
   pause_enabled: z.boolean().default(true),
   allow_public_bookings: z.boolean().default(true),
   waitlist_enabled: z.boolean().default(true),

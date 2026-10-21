@@ -282,6 +282,39 @@ async function main() {
     noEnq.n === 0 ? pass('auto-send disabled → no queue entry') : fail('whatsapp disabled enqueue', new Error(JSON.stringify(noEnq)));
     await client.query('update public.whatsapp_state set enabled = true, auto_send = true');
 
+    // 10c. 00018 — ₹5 money rounding + package-aware booking estimates
+    const { rows: [rndSet] } = await client.query("select total_rounding from public.settings where id = 'default'");
+    Number(rndSet.total_rounding) === 5
+      ? pass('settings.total_rounding defaults to ₹5 steps')
+      : fail('total_rounding default', new Error(JSON.stringify(rndSet)));
+    // the engine hands the RPC its round-off add-on: 122 → 125
+    const { rows: [{ admin_start_session: rndSid }] } = await client.query(
+      'select public.admin_start_session(null, $1, $2, now(), null, null, null, $3)', [ps5.id, plan.id, user.id]
+    );
+    const { rows: [{ admin_end_session_and_invoice: rndEnd }] } = await client.query(
+      'select * from public.admin_end_session_and_invoice($1, $2, null, 0, null, null, $3)',
+      [rndSid, JSON.stringify({ duration_seconds: 0, gaming_amount: 122, rounding_amount: 3 }), user.id]
+    );
+    Number(rndEnd.total_amount) === 125
+      ? pass('money rounding: ₹122 + ₹3 round-off → payable ₹125')
+      : fail('money rounding', new Error(JSON.stringify(rndEnd)));
+    // an exact-sized package is the booking price even under the min-billing floor
+    const { rows: [ps5row] } = await client.query('select type from public.resources where id = $1', [ps5.id]);
+    const { rows: [prevSet] } = await client.query("select min_billing_minutes from public.settings where id = 'default'");
+    await client.query('update public.settings set min_billing_minutes = 50 where id = $1', ['default']);
+    await client.query(
+      `insert into public.pricing_plans (resource_type, name, billing_type, price, duration_minutes, active)
+       values ($1, 'Test — 30 Minutes', 'PACKAGE', 120, 30, true)`, [ps5row.type]
+    );
+    const { rows: [{ estimate_booking_amount: est30 }] } = await client.query(
+      'select public.estimate_booking_amount($1, 30)', [ps5.id]
+    );
+    Number(est30) === 120
+      ? pass('booking estimate: 30-min package = ₹120 (min-billing floor does not inflate it)')
+      : fail('package estimate', new Error(JSON.stringify(est30)));
+    await client.query('update public.settings set min_billing_minutes = $1 where id = $2', [prevSet.min_billing_minutes, 'default']);
+    await client.query(`delete from public.pricing_plans where name = 'Test — 30 Minutes'`);
+
     // 11. resource released
     const { rows: [resStatus2] } = await client.query('select current_status from public.resources where id = $1', [ps5.id]);
     resStatus2.current_status === 'AVAILABLE' ? pass('resource released → AVAILABLE') : fail('resource release');

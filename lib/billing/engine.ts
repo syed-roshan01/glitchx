@@ -64,6 +64,8 @@ export interface BillingBreakdown {
   taxName: string | null;
   taxRate: number;
   taxAmount: number;
+  /** money-rounding add-on (e.g. ₹5 steps: 122 → 125 → +3) */
+  roundingAmount: number;
   total: number;
 }
 
@@ -260,17 +262,21 @@ export interface BreakdownArgs {
   tax?: { enabled: boolean; name?: string | null; rate?: number | null } | null;
   /** staff-set time charge (from an edited final total) — replaces the timer amount */
   gamingOverride?: number | null;
+  /** money step the payable total rounds UP to (5 = ₹5 steps; 0 = exact) */
+  totalRounding?: number;
 }
 
-type BillTotals = Pick<BillingBreakdown, 'subtotal' | 'discountAmount' | 'taxAmount' | 'total'>;
+type BillTotals = Pick<BillingBreakdown, 'subtotal' | 'discountAmount' | 'taxAmount' | 'roundingAmount' | 'total'>;
 
-/** Subtotal → discount → tax → total. Mirrors admin_end_session_and_invoice exactly. */
+/** Subtotal → discount → tax → round up to the money step → total.
+ *  Mirrors admin_end_session_and_invoice exactly. */
 export function computeBillTotals(
   gamingAmount: number,
   itemAmount: number,
   serviceAmount: number,
   discount: { type: DiscountType; value: number } | null | undefined,
-  taxRate: number
+  taxRate: number,
+  totalRounding = 0
 ): BillTotals {
   const subtotal = round2(gamingAmount + itemAmount + serviceAmount);
   let discountAmount = 0;
@@ -281,8 +287,11 @@ export function computeBillTotals(
         : Math.min(round2(discount.value), subtotal);
   }
   const taxAmount = round2(((subtotal - discountAmount) * taxRate) / 100);
-  const total = round2(Math.max(subtotal - discountAmount + taxAmount, 0));
-  return { subtotal, discountAmount, taxAmount, total };
+  const rawTotal = round2(Math.max(subtotal - discountAmount + taxAmount, 0));
+  // round the payable UP to the cafe's money step: 122 → 125, 141 → 145
+  const total =
+    totalRounding > 0 ? round2(Math.ceil(rawTotal / totalRounding) * totalRounding) : rawTotal;
+  return { subtotal, discountAmount, taxAmount, roundingAmount: round2(total - rawTotal), total };
 }
 
 /**
@@ -296,11 +305,13 @@ export function gamingForTargetTotal(args: {
   serviceAmount?: number;
   discount?: { type: DiscountType; value: number } | null;
   taxRate?: number;
+  totalRounding?: number;
 }): number | null {
   const target = round2(args.targetTotal);
   const items = round2(args.itemAmount ?? 0);
   const services = round2(args.serviceAmount ?? 0);
   const rate = args.taxRate ?? 0;
+  const r = args.totalRounding ?? 0;
   const d = args.discount && args.discount.value > 0 ? args.discount : null;
   if (!Number.isFinite(target) || target < 0) return null;
 
@@ -321,9 +332,9 @@ export function gamingForTargetTotal(args: {
   const candidates = [0, -0.01, 0.01, -0.02, 0.02, -0.03, 0.03].map((delta) => round2(estimate + delta));
   for (const g of candidates) {
     if (g < 0) continue;
-    if (computeBillTotals(g, items, services, d, rate).total === target) return g;
+    if (computeBillTotals(g, items, services, d, rate, r).total === target) return g;
   }
-  return estimate >= 0 && computeBillTotals(estimate, items, services, d, rate).total >= target - 0.05
+  return estimate >= 0 && computeBillTotals(estimate, items, services, d, rate, r).total >= target - 0.05
     ? estimate
     : null;
 }
@@ -354,12 +365,13 @@ export function calculateSessionBreakdown(args: BreakdownArgs): BillingBreakdown
 
   const taxEnabled = args.tax?.enabled ?? false;
   const taxRate = taxEnabled ? args.tax?.rate ?? 0 : 0;
-  const { subtotal, discountAmount, taxAmount, total } = computeBillTotals(
+  const { subtotal, discountAmount, taxAmount, roundingAmount, total } = computeBillTotals(
     gamingAmount,
     itemAmount,
     serviceAmount,
     args.discount,
-    taxRate
+    taxRate,
+    args.totalRounding ?? 0
   );
 
   return {
@@ -377,6 +389,7 @@ export function calculateSessionBreakdown(args: BreakdownArgs): BillingBreakdown
     taxName: taxEnabled ? args.tax?.name ?? null : null,
     taxRate,
     taxAmount,
+    roundingAmount,
     total,
   };
 }

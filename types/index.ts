@@ -285,6 +285,8 @@ export interface CafeSettings {
   tax_rate: number | null;
   billing_mode: BillingMode;
   min_billing_minutes: number;
+  /** money step the payable total rounds UP to (5 = ₹5 steps; 0 = exact) */
+  total_rounding: number;
   pause_enabled: boolean;
   allow_public_bookings: boolean;
   waitlist_enabled: boolean;

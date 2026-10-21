@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import Link from 'next/link';
 import { useApi, invalidate } from '@/lib/use-api';
 import { useSettings } from '@/components/admin/admin-context';
@@ -19,6 +19,7 @@ import type {
 import {
   IndianRupee, Activity, Users, CalendarCheck, Hourglass, Receipt,
   Plus, CalendarPlus, UserPlus, CupSoda, Gamepad2, MonitorPlay, ListOrdered, TrendingUp,
+  Eye, EyeOff,
 } from 'lucide-react';
 
 interface DashboardData {
@@ -75,6 +76,11 @@ export default function DashboardPage() {
   }
 
   const { stats, resources, sessions, sessionItems, waitlist, bookings, rules } = data;
+
+  // revenue is hidden by default — reveal only on demand (customers
+  // at the counter shouldn't see the day's takings)
+  const [showRevenue, setShowRevenue] = useState(false);
+  const money = (n: number) => (showRevenue ? formatMoney(n, sym) : `${sym} ••••`);
   const sym = settings.currency_symbol || '₹';
 
   // Utilization = busy minutes today / (active resources × minutes elapsed
@@ -106,13 +112,26 @@ export default function DashboardPage() {
             >
               <CalendarPlus className="h-4 w-4" /> New Booking
             </Link>
+            <button
+              type="button"
+              onClick={() => setShowRevenue((v) => !v)}
+              aria-pressed={showRevenue}
+              className={`inline-flex h-10 items-center gap-2 rounded-xl border px-4 text-sm font-bold transition-colors ${
+                showRevenue
+                  ? 'border-success/40 bg-success/10 text-success'
+                  : 'border-border bg-surface-2 text-muted hover:text-content'
+              }`}
+            >
+              {showRevenue ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              {showRevenue ? 'Hide revenue' : 'Show revenue'}
+            </button>
           </>
         }
       />
 
       {/* stats */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-        <StatCard label="Today's Revenue" value={formatMoney(stats.todayRevenue, sym)} tone="success" icon={<IndianRupee className="h-4 w-4" />} />
+        <StatCard label="Today's Revenue" value={money(stats.todayRevenue)} tone="success" icon={<IndianRupee className="h-4 w-4" />} />
         <StatCard label="Active Sessions" value={stats.activeSessions} tone="primary" icon={<Activity className="h-4 w-4" />} />
         <StatCard label="Today's Sessions" value={stats.todaySessions} icon={<Gamepad2 className="h-4 w-4" />} />
         <StatCard label="Today's Customers" value={stats.todayCustomers} icon={<Users className="h-4 w-4" />} />
@@ -238,14 +257,14 @@ export default function DashboardPage() {
       <section aria-label="Today's revenue">
         <h2 className="mb-3 text-sm font-bold uppercase tracking-wider text-muted">Today's revenue</h2>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <StatCard label="Gaming" value={formatMoney(stats.gamingRevenue, sym)} icon={<Gamepad2 className="h-4 w-4" />} />
-          <StatCard label="Food & Drinks" value={formatMoney(stats.foodRevenue, sym)} icon={<CupSoda className="h-4 w-4" />} />
-          <StatCard label="Services" value={formatMoney(stats.serviceRevenue, sym)} icon={<TrendingUp className="h-4 w-4" />} />
-          <StatCard label="Total" value={formatMoney(stats.todayRevenue, sym)} tone="success" icon={<Receipt className="h-4 w-4" />} />
+          <StatCard label="Gaming" value={money(stats.gamingRevenue)} icon={<Gamepad2 className="h-4 w-4" />} />
+          <StatCard label="Food & Drinks" value={money(stats.foodRevenue)} icon={<CupSoda className="h-4 w-4" />} />
+          <StatCard label="Services" value={money(stats.serviceRevenue)} icon={<TrendingUp className="h-4 w-4" />} />
+          <StatCard label="Total" value={money(stats.todayRevenue)} tone="success" icon={<Receipt className="h-4 w-4" />} />
         </div>
         <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
           <StatCard label="Avg session" value={`${stats.avgSessionMinutes} min`} />
-          <StatCard label="Avg bill" value={formatMoney(stats.avgBillValue, sym)} />
+          <StatCard label="Avg bill" value={money(stats.avgBillValue)} />
           <StatCard
             label="Resource utilization"
             value={`${utilizationPct}%`}

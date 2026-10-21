@@ -1,4 +1,4 @@
-// Billing engine unit tests — Node built-in test runner.
+// Billing engine unit tests â€” Node built-in test runner.
 // Run: npm test  (node --experimental-strip-types --test tests/)
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -81,7 +81,7 @@ describe('matchPricingRule (peak hours)', () => {
   };
 
   it('matches inside the window in the cafe timezone', () => {
-    const ist9pm = new Date('2026-10-03T15:30:00Z'); // 9:00 PM IST — inside window
+    const ist9pm = new Date('2026-10-03T15:30:00Z'); // 9:00 PM IST â€” inside window
     const rule = matchPricingRule([peakRule], {
       resourceId: 'ps1',
       resourceType: 'PLAYSTATION',
@@ -92,7 +92,7 @@ describe('matchPricingRule (peak hours)', () => {
   });
 
   it('does not match outside the window', () => {
-    const ist2pm = new Date('2026-10-03T08:30:00Z'); // 2:00 PM IST — outside
+    const ist2pm = new Date('2026-10-03T08:30:00Z'); // 2:00 PM IST â€” outside
     const rule = matchPricingRule([peakRule], {
       resourceId: 'ps1',
       resourceType: 'PLAYSTATION',
@@ -135,7 +135,7 @@ describe('matchPricingRule (peak hours)', () => {
 describe('computeGamingCharge', () => {
   const ctx = { resourceId: 'ps1', resourceType: 'PLAYSTATION', startTimestamp: '2026-10-03T10:00:00Z', timeZone: 'UTC' };
 
-  it('prorates hourly rate per billable minute (₹100/hr × 42 min = ₹70)', () => {
+  it('prorates hourly rate per billable minute (â‚¹100/hr Ã— 42 min = â‚¹70)', () => {
     const { amount } = computeGamingCharge(hourly100, [], ctx, 42);
     money(amount, 70);
   });
@@ -157,7 +157,7 @@ describe('computeGamingCharge', () => {
   });
 
   it('PACKAGE prorates extra time beyond the window', () => {
-    // 150 min on a 120-min ₹180 package → 180 + 30 × 1.5 = 225
+    // 150 min on a 120-min â‚¹180 package â†’ 180 + 30 Ã— 1.5 = 225
     const { amount } = computeGamingCharge(pkg180, [], ctx, 150);
     money(amount, 225);
   });
@@ -210,11 +210,11 @@ describe('estimateBookingAmount', () => {
     money(estimateBookingAmount(pkg180, 150), 225);
   });
 
-  it('applies the cafe rounding policy like the final bill (the ₹140 bug)', () => {
+  it('applies the cafe rounding policy like the final bill (the â‚¹140 bug)', () => {
     const ps5: PlanSnapshot = { name: 'PS5 Hourly', billing_type: 'HOURLY', price: 150, duration_minutes: null };
-    // exact minutes: 56 min × ₹2.50 = ₹140 — what the old estimate showed
+    // exact minutes: 56 min Ã— â‚¹2.50 = â‚¹140 â€” what the old estimate showed
     money(estimateBookingAmount(ps5, 56), 140);
-    // ROUND_UP_15 (cafe setting): 56 min bills as 60 min = ₹150, same as the timer
+    // ROUND_UP_15 (cafe setting): 56 min bills as 60 min = â‚¹150, same as the timer
     money(estimateBookingAmount(ps5, 56, 'ROUND_UP_15'), 150);
     money(estimateBookingAmount(ps5, 61, 'ROUND_UP_15'), 187.5);
     const timerBill = calculateSessionBreakdown({
@@ -266,7 +266,7 @@ describe('calculateSessionBreakdown (end-to-end bill)', () => {
       discount: { type: 'FIXED', value: 10 },
       tax: { enabled: false, rate: 0 },
     });
-    money(b.gamingAmount, 86.67); // 52 × 100/60
+    money(b.gamingAmount, 86.67); // 52 Ã— 100/60
     money(b.subtotal, 246.67);
     money(b.discountAmount, 10);
     money(b.taxAmount, 0);
@@ -282,7 +282,7 @@ describe('calculateSessionBreakdown (end-to-end bill)', () => {
       resourceId: 'ps1',
       resourceType: 'PLAYSTATION',
       timing,
-      endAt: end, // 52 min → rounds to 60
+      endAt: end, // 52 min â†’ rounds to 60
       tax: { enabled: false, rate: 0 },
     });
     assert.equal(b.billableMinutes, 60);
@@ -304,7 +304,7 @@ describe('calculateSessionBreakdown (end-to-end bill)', () => {
     });
     money(b.subtotal, 200);
     money(b.discountAmount, 20);
-    money(b.taxAmount, 32.4); // (200-20) × 18%
+    money(b.taxAmount, 32.4); // (200-20) Ã— 18%
     money(b.total, 212.4);
   });
 
@@ -343,7 +343,7 @@ describe('calculateSessionBreakdown (end-to-end bill)', () => {
 });
 
 describe('editing the final total at the end of a session', () => {
-  it('no discount/tax: time charge = total − food', () => {
+  it('no discount/tax: time charge = total âˆ’ food', () => {
     money(gamingForTargetTotal({ targetTotal: 200, itemAmount: 40 })!, 160);
   });
 
@@ -385,5 +385,37 @@ describe('editing the final total at the end of a session', () => {
     money(b.gamingAmount, 160);
     assert.equal(b.gamingAdjusted, true);
     money(b.total, 200);
+  });
+});
+
+describe('money rounding (total_rounding steps)', () => {
+  it('rounds the payable UP to the money step', () => {
+    money(computeBillTotals(122, 0, 0, null, 0, 5).total, 125);
+    money(computeBillTotals(141, 0, 0, null, 0, 5).total, 145);
+    money(computeBillTotals(125, 0, 0, null, 0, 5).total, 125);
+    money(computeBillTotals(120, 0, 0, null, 0, 5).total, 120);
+    money(computeBillTotals(122, 0, 0, null, 0, 5).roundingAmount, 3);
+  });
+
+  it('off = exact, and manual totals land on the rounded target', () => {
+    money(computeBillTotals(122, 0, 0, null, 0, 0).total, 122);
+    const g = gamingForTargetTotal({ targetTotal: 125, totalRounding: 5 })!;
+    money(computeBillTotals(g, 0, 0, null, 0, 5).total, 125);
+    money(computeBillTotals(145, 30, 0, { type: 'FIXED', value: 10 }, 0, 5).total, 165);
+  });
+
+  it('the breakdown carries the round-off amount', () => {
+    const b = calculateSessionBreakdown({
+      plan: { name: 'PS5', billing_type: 'HOURLY', price: 150, duration_minutes: null },
+      billingMode: 'EXACT_MINUTES',
+      resourceId: 'r',
+      resourceType: 'PLAYSTATION',
+      timing: { actual_start_time: '2026-10-03T20:00:00Z', paused_at: null, total_paused_seconds: 0 },
+      endAt: new Date('2026-10-03T20:12:00Z'),
+      totalRounding: 5,
+    });
+    // 12 min at ?2.5/min = ?30 — already a step multiple
+    money(b.total, 30);
+    money(b.roundingAmount, 0);
   });
 });

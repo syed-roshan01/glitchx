@@ -89,14 +89,21 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       : null;
 
   const taxRate = settings.tax_enabled ? settings.tax_rate ?? 0 : 0;
+  const totalRounding = settings.total_rounding ?? 0;
+  // a hand-set total follows the money step too (typed 122 → bills 125)
+  const targetTotal =
+    input.finalTotal != null && totalRounding > 0
+      ? Math.ceil(input.finalTotal / totalRounding) * totalRounding
+      : (input.finalTotal ?? 0);
   let gamingOverride: number | null = null;
   if (input.finalTotal != null) {
     gamingOverride = gamingForTargetTotal({
-      targetTotal: input.finalTotal,
+      targetTotal,
       itemAmount,
       serviceAmount,
       discount,
       taxRate,
+      totalRounding,
     });
     if (gamingOverride === null) {
       return jsonError('The total cannot be less than the food, drinks and services on this bill.', 400);
@@ -126,6 +133,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     serviceAmount,
     discount,
     tax: { enabled: settings.tax_enabled, name: settings.tax_name, rate: settings.tax_rate },
+    totalRounding,
   });
 
   // ---- atomic end-session transaction ----
@@ -134,6 +142,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     p_billing: {
       duration_seconds: Math.floor(breakdown.elapsedSeconds),
       gaming_amount: breakdown.gamingAmount,
+      rounding_amount: breakdown.roundingAmount,
     },
     p_discount_type: input.discountType ?? null,
     p_discount_value: input.discountType ? Number(input.discountValue ?? 0) : 0,

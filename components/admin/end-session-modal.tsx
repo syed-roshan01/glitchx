@@ -52,6 +52,8 @@ export function EndSessionModal({
   const [finalTotal, setFinalTotal] = useState<number | null>(null);
   const [editingTotal, setEditingTotal] = useState(false);
   const [totalDraft, setTotalDraft] = useState('');
+  // money step (0 = off): hand-set totals snap UP to it — typed 122 → bills 125
+  const roundStep = settings.total_rounding ?? 0;
 
   useEffect(() => {
     if (!open) return;
@@ -90,6 +92,7 @@ export function EndSessionModal({
       rules,
       billingMode: settings.billing_mode,
       minBillingMinutes: settings.min_billing_minutes,
+      totalRounding: settings.total_rounding ?? 0,
       timeZone: settings.timezone,
       resourceId: session.resource_id,
       resourceType: session.resource_type ?? '',
@@ -106,7 +109,7 @@ export function EndSessionModal({
       // an edited total freezes the time charge at the amount that produces it
       gamingOverride:
         finalTotal != null
-          ? gamingForTargetTotal({ targetTotal: finalTotal, itemAmount, serviceAmount, discount, taxRate })
+          ? gamingForTargetTotal({ targetTotal: finalTotal, itemAmount, serviceAmount, discount, taxRate, totalRounding: roundStep })
           : null,
     });
   }, [frozenEnd, session, items, settings, rules, discountType, discountValue, finalTotal]);
@@ -133,7 +136,8 @@ export function EndSessionModal({
         breakdown.itemAmount,
         breakdown.serviceAmount,
         discountType && discountValue > 0 ? { type: discountType, value: Number(discountValue) } : null,
-        breakdown.taxRate
+        breakdown.taxRate,
+        roundStep
       ).total
     : 0;
 
@@ -152,7 +156,8 @@ export function EndSessionModal({
   }
   function applyTotal() {
     if (draftError) return;
-    setFinalTotal(Math.round(draftValue * 100) / 100);
+    const snapped = roundStep > 0 ? Math.ceil(draftValue / roundStep) * roundStep : draftValue;
+    setFinalTotal(Math.round(snapped * 100) / 100);
     setEditingTotal(false);
   }
 
@@ -360,6 +365,9 @@ export function EndSessionModal({
             )}
             {breakdown.taxAmount > 0 && (
               <Row label={`${breakdown.taxName ?? 'Tax'} (${breakdown.taxRate}%)`} value={formatMoney(breakdown.taxAmount, sym)} />
+            )}
+            {breakdown.roundingAmount > 0 && (
+              <Row label={`Round off (to ₹${roundStep})`} value={`+ ${formatMoney(breakdown.roundingAmount, sym)}`} tone="text-muted" />
             )}
             {editingTotal ? (
               <div className="mt-3 rounded-xl border border-primary/40 bg-primary/10 px-4 py-3">

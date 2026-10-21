@@ -119,6 +119,9 @@ export function mapSettings(r: any): CafeSettings {
   return {
     ...r,
     tax_rate: r.tax_rate === null ? null : num(r.tax_rate),
+    // money-rounding step (0 = exact) — 00018 adds the column; before that,
+    // off keeps the engine and the DB in agreement
+    total_rounding: num(r.total_rounding ?? 0),
   };
 }
 

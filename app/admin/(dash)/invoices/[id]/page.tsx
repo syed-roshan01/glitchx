@@ -425,6 +425,14 @@ function A4Layout({
               <span className="tabular-nums">{formatMoney(invoice.tax_amount, sym)}</span>
             </div>
           )}
+          {Math.abs(invoice.total_amount - (invoice.subtotal - invoice.discount_amount + invoice.tax_amount)) > 0.001 && (
+            <div className="flex justify-between text-gray-600">
+              <span>Round off</span>
+              <span className="tabular-nums">
+                + {formatMoney(invoice.total_amount - (invoice.subtotal - invoice.discount_amount + invoice.tax_amount), sym)}
+              </span>
+            </div>
+          )}
           <div className="flex justify-between border-t-2 border-black pt-2 text-base font-black">
             <span>TOTAL</span>
             <span className="tabular-nums">{formatMoney(invoice.total_amount, sym)}</span>
@@ -509,6 +517,14 @@ function ThermalLayout({
         <div className="flex justify-between text-[11px]">
           <span>{invoice.tax_name}</span>
           <span className="tabular-nums">{formatMoney(invoice.tax_amount, sym)}</span>
+        </div>
+      )}
+      {Math.abs(invoice.total_amount - (invoice.subtotal - invoice.discount_amount + invoice.tax_amount)) > 0.001 && (
+        <div className="flex justify-between text-[11px]">
+          <span>Round off</span>
+          <span className="tabular-nums">
+            +{formatMoney(invoice.total_amount - (invoice.subtotal - invoice.discount_amount + invoice.tax_amount), sym)}
+          </span>
         </div>
       )}
       <div className="mt-1 flex justify-between border-t border-dashed border-black pt-1 text-sm font-black">
